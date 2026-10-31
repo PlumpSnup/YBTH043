@@ -2,7 +2,7 @@
 
 Paste a YouTube link and watch it in a clean, Khan Academy–style lesson player with custom controls, without YouTube's control bar, title bar or "Watch on YouTube" button.
 
-The video still streams from YouTube through the official IFrame Player API (privacy-enhanced `youtube-nocookie.com` mode). We hide YouTube's controls (`controls=0`) and draw our own on top. YouTube may still show its logo briefly at times, and its terms don't allow covering that.
+The video still streams from YouTube as a normal embed (the same kind most websites use). `yt.js` controls it directly over `postMessage`, so it doesn't need YouTube's `iframe_api` script, which ad blockers often block. We hide YouTube's controls (`controls=0`) and draw our own on top. YouTube may still show its logo briefly at times, and its terms don't allow covering that.
 
 ## Features
 
@@ -34,4 +34,5 @@ It's a static site. On Vercel, import the repo with framework preset **Other**, 
 - `index.html`: page markup
 - `styles.css`: styles
 - `parse.js`: turns a YouTube link into a video ID and start time
-- `app.js`: player logic (YouTube IFrame API + custom controls)
+- `yt.js`: talks to the embedded YouTube video (play, pause, seek, volume…)
+- `app.js`: player logic and custom controls

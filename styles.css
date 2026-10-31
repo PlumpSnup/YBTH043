@@ -240,3 +240,10 @@ kbd {
   .big-play svg { width: 30px; height: 30px; }
   .video-title { font-size: 19px; }
 }
+
+/* Fallback: YouTube's own controls when ours can't connect to the video */
+.player-shell.native-mode .video-frame { pointer-events: auto; }
+.player-shell.native-mode .click-layer,
+.player-shell.native-mode .poster,
+.player-shell.native-mode .controls,
+.player-shell.native-mode .spinner { display: none; }

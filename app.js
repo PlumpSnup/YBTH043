@@ -2,6 +2,7 @@
   'use strict';
 
   var $ = function (id) { return document.getElementById(id); };
+  var YT = window.LessonYT;  // our own embed controller (yt.js), no YouTube script needed
 
   var els = {
     form: $('link-form'), input: $('link-input'), formError: $('form-error'),
@@ -21,8 +22,6 @@
   var RECENT_MAX = 8;
 
   var player = null;
-  var apiReady = false;
-  var pendingLoad = null;
   var current = null;          // { id, start }
   var started = false;         // has the current video been played at least once
   var seeking = false;
@@ -33,42 +32,27 @@
   var watchdog = null;         // detects a player that never finishes loading
   var createdWithId = null;    // video the player was first created with
 
-  // ---------- YouTube IFrame API ----------
+  // ---------- YouTube player ----------
 
-  function loadApi() {
-    var s = document.createElement('script');
-    s.src = 'https://www.youtube.com/iframe_api';
-    s.async = true;
-    s.onerror = function () {
-      showPlayerError('Could not load the video player. Check your connection and try again.');
+  function playerVars(video) {
+    return {
+      controls: 0,          // hide YouTube's control bar — we draw our own
+      disablekb: 1,         // we handle the keyboard
+      fs: 0,                // hide YouTube's fullscreen button
+      rel: 0,               // related videos only from the same channel
+      iv_load_policy: 3,    // hide annotations
+      playsinline: 1,
+      cc_load_policy: 0,
+      start: video.start || 0,
+      origin: location.origin
     };
-    document.head.appendChild(s);
   }
-
-  window.onYouTubeIframeAPIReady = function () {
-    apiReady = true;
-    if (pendingLoad) {
-      var p = pendingLoad;
-      pendingLoad = null;
-      loadVideo(p);
-    }
-  };
 
   function createPlayer(video) {
     createdWithId = video.id;
     player = new YT.Player('yt-target', {
       videoId: video.id,
-      playerVars: {
-        controls: 0,          // hide YouTube's control bar — we draw our own
-        disablekb: 1,         // we handle the keyboard
-        fs: 0,                // hide YouTube's fullscreen button
-        rel: 0,               // related videos only from the same channel
-        iv_load_policy: 3,    // hide annotations
-        playsinline: 1,
-        cc_load_policy: 0,
-        start: video.start || 0,
-        origin: location.origin
-      },
+      playerVars: playerVars(video),
       events: {
         onReady: onPlayerReady,
         onStateChange: onStateChange,
@@ -168,14 +152,20 @@
       autoplay = true;
       clearTimeout(watchdog);
       watchdog = setTimeout(function () {
-        if (!playerReady) {
-          showPlayerError('The YouTube player didn’t load. If you use an ad blocker or privacy ' +
-            'extension, allow youtube.com on this site and reload the page.');
+        // The video frame never answered our controls. Rather than show an error,
+        // fall back to YouTube's own controls so the video still plays.
+        if (!playerReady && player && current) {
+          els.shell.classList.add('native-mode');
+          player.useNativeControls(current.id, playerVars(current));
+          if (els.title.textContent === 'Loading…') els.title.textContent = 'YouTube video';
         }
-      }, 15000);
+      }, 10000);
     }
 
-    if (!apiReady) { pendingLoad = video; return; }
+    if (els.shell.classList.contains('native-mode') && player) {
+      player.useNativeControls(video.id, playerVars(video));
+      return;
+    }
 
     if (!player) {
       createPlayer(video);
@@ -473,7 +463,6 @@
   // ---------- Boot ----------
 
   renderRecent();
-  loadApi();
 
   var params = new URLSearchParams(location.search);
   if (params.get('v')) {
