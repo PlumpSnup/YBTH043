@@ -91,65 +91,34 @@ body {
 /* ---------- Player ---------- */
 
 .player-shell {
-  position: relative;
-  aspect-ratio: 16 / 9;
+  display: flex; flex-direction: column;
   background: #000;
   border-radius: var(--radius);
   overflow: hidden;
   outline: none;
   user-select: none;
 }
-.player-shell.is-fullscreen { border-radius: 0; aspect-ratio: auto; width: 100%; height: 100%; }
+.player-shell.is-fullscreen { border-radius: 0; width: 100%; height: 100%; }
 
-.video-frame, .video-frame iframe, #yt-target {
+/* The embedded YouTube player. Nothing is layered on top of it (YouTube's terms). */
+.video-frame { position: relative; aspect-ratio: 16 / 9; background: #000; }
+.player-shell.is-fullscreen .video-frame { flex: 1; aspect-ratio: auto; }
+.video-frame iframe, #yt-target {
   position: absolute; inset: 0; width: 100%; height: 100%; border: 0;
 }
-/* All clicks go to our own click layer / controls, never to YouTube's UI */
-.video-frame { pointer-events: none; }
-
-.click-layer { position: absolute; inset: 0; cursor: pointer; }
-.player-shell.is-playing:not(.controls-visible) .click-layer { cursor: none; }
-
-.poster { position: absolute; inset: 0; cursor: pointer; background: #000; }
-.poster[hidden] { display: none; }
-.poster img { width: 100%; height: 100%; object-fit: cover; opacity: .85; }
-.big-play {
-  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-  width: 84px; height: 84px; border-radius: 50%;
-  background: var(--accent); color: #fff; border: 0; cursor: pointer;
-  display: grid; place-items: center;
-  box-shadow: 0 8px 30px rgba(0,0,0,.35);
-  transition: transform .15s ease;
-}
-.big-play:hover { transform: translate(-50%, -50%) scale(1.06); }
-.big-play svg { width: 40px; height: 40px; fill: currentColor; margin-left: 4px; }
-
-.spinner {
-  position: absolute; left: 50%; top: 50%;
-  width: 48px; height: 48px; margin: -24px 0 0 -24px;
-  border: 4px solid rgba(255,255,255,.25); border-top-color: #fff; border-radius: 50%;
-  animation: spin .8s linear infinite; pointer-events: none;
-}
-.spinner[hidden] { display: none; }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 .player-error {
-  position: absolute; inset: 0; display: grid; place-items: center;
-  padding: 24px; text-align: center; background: #111; color: #eee;
+  margin: 0; padding: 12px 16px;
+  background: #2a1414; color: #ffd9d4; font-size: 14px;
 }
 .player-error[hidden] { display: none; }
 
-/* Controls */
+/* Controls: a toolbar directly below the video, never over it */
 .controls {
-  position: absolute; left: 0; right: 0; bottom: 0;
-  padding: 28px 14px 10px;
-  background: linear-gradient(to top, rgba(0,0,0,.8), rgba(0,0,0,0));
+  padding: 8px 12px 8px;
+  background: #15191f;
   color: #fff;
-  opacity: 1; transition: opacity .25s ease;
 }
-.player-shell.is-playing:not(.controls-visible) .controls { opacity: 0; pointer-events: none; }
-.poster:not([hidden]) ~ .controls { opacity: 0; pointer-events: none; }
-.player-shell.is-ended .controls { opacity: 1; pointer-events: auto; }
 
 .control-row { display: flex; align-items: center; gap: 4px; }
 .spacer { flex: 1; }
@@ -236,14 +205,8 @@ kbd {
   .link-form button { padding: 0 16px; }
   #btn-back, #btn-fwd { display: none; }
   .volume-slider { display: none; }
-  .big-play { width: 64px; height: 64px; }
-  .big-play svg { width: 30px; height: 30px; }
   .video-title { font-size: 19px; }
 }
 
 /* Fallback: YouTube's own controls when ours can't connect to the video */
-.player-shell.native-mode .video-frame { pointer-events: auto; }
-.player-shell.native-mode .click-layer,
-.player-shell.native-mode .poster,
-.player-shell.native-mode .controls,
-.player-shell.native-mode .spinner { display: none; }
+.player-shell.native-mode .controls { display: none; }

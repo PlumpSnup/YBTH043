@@ -31,24 +31,10 @@
 
     <section id="stage" class="stage" hidden>
       <div id="player-shell" class="player-shell" tabindex="0" aria-label="Video player">
+        <!-- YouTube's terms: nothing may be drawn on top of the embedded player,
+             so the video stays fully visible and our controls sit below it. -->
         <div class="video-frame">
           <div id="yt-target"></div>
-        </div>
-
-        <!-- Sits on top of the iframe so clicks go to our player, not YouTube's UI -->
-        <div id="click-layer" class="click-layer"></div>
-
-        <div id="poster" class="poster">
-          <img id="poster-img" alt="" />
-          <button id="big-play" class="big-play" aria-label="Play">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
-          </button>
-        </div>
-
-        <div id="spinner" class="spinner" hidden></div>
-
-        <div id="player-error" class="player-error" hidden>
-          <p id="player-error-text"></p>
         </div>
 
         <div id="controls" class="controls">
@@ -102,6 +88,10 @@
             </button>
           </div>
         </div>
+
+        <p id="player-error" class="player-error" role="alert" hidden>
+          <span id="player-error-text"></span>
+        </p>
       </div>
 
       <div class="meta">
