@@ -2,7 +2,8 @@
   'use strict';
 
   var $ = function (id) { return document.getElementById(id); };
-  var YT = window.LessonYT;  // our own embed controller (yt.js), no YouTube script needed
+  var LYT = window.LessonYT;       // yt.js: official IFrame API loader + embed helpers
+  var PS = LYT.PlayerState;
 
   var els = {
     form: $('link-form'), input: $('link-input'), formError: $('form-error'),
@@ -13,43 +14,47 @@
     btnFwd: $('btn-fwd'), btnMute: $('btn-mute'), volume: $('volume'),
     time: $('time'), speed: $('speed'), btnFull: $('btn-full'),
     title: $('video-title'), author: $('video-author'),
-    recentWrap: $('recent-wrap'), recent: $('recent')
+    recentWrap: $('recent-wrap'), recent: $('recent'), clearRecent: $('clear-recent')
   };
 
   var RECENT_KEY = 'lesson-player:recent';
   var RECENT_MAX = 8;
+  var RECENT_MAX_AGE = 30 * 24 * 60 * 60 * 1000;   // keep stored titles at most 30 days
 
-  var player = null;
+  var player = null;           // YT.Player when the official API is available
   var current = null;          // { id, start }
   var started = false;         // has the current video been played at least once
   var seeking = false;
   var tickTimer = null;
   var playerReady = false;
   var autoplay = false;        // start playing as soon as the player is ready
-  var watchdog = null;         // detects a player that never finishes loading
   var createdWithId = null;    // video the player was first created with
+  var nativeMode = false;      // API unavailable: plain embed with YouTube's own controls
 
   // ---------- YouTube player ----------
 
   function playerVars(video) {
     return {
-      controls: 0,          // hide YouTube's control bar — we draw our own
+      enablejsapi: 1,       // lets the official IFrame API control this embed
+      controls: 0,          // hide YouTube's control bar; ours sits below the video
       disablekb: 1,         // we handle the keyboard
-      fs: 0,                // hide YouTube's fullscreen button
+      fs: 0,                // fullscreen is handled by our own button
       rel: 0,               // related videos only from the same channel
       iv_load_policy: 3,    // hide annotations
       playsinline: 1,
-      cc_load_policy: 0,
       start: video.start || 0,
       origin: location.origin
     };
   }
 
+  function nativeVars(video) {
+    return { autoplay: 1, rel: 0, playsinline: 1, start: video.start || 0 };
+  }
+
   function createPlayer(video) {
     createdWithId = video.id;
-    player = new YT.Player('yt-target', {
-      videoId: video.id,
-      playerVars: playerVars(video),
+    LYT.frame('yt-target', LYT.embedUrl(video.id, playerVars(video)));
+    player = new window.YT.Player('yt-target', {
       events: {
         onReady: onPlayerReady,
         onStateChange: onStateChange,
@@ -58,9 +63,17 @@
     });
   }
 
+  // The official API couldn't load (often an ad blocker). Show a plain embed with
+  // YouTube's own controls rather than relying on anything undocumented.
+  function useNativePlayer(video) {
+    nativeMode = true;
+    els.shell.classList.add('native-mode');
+    LYT.frame('yt-target', LYT.embedUrl(video.id, nativeVars(video)));
+    if (els.title.textContent === 'Loading…') els.title.textContent = 'YouTube video';
+  }
+
   function onPlayerReady() {
     playerReady = true;
-    clearTimeout(watchdog);
     applyVolume();
     player.setPlaybackRate(parseFloat(els.speed.value));
     startTick();
@@ -70,29 +83,23 @@
       player.loadVideoById({ videoId: current.id, startSeconds: current.start || 0 });
       return;
     }
-    refreshMeta();
     if (els.title.textContent === 'Loading…') els.title.textContent = 'YouTube video';
     if (autoplay) { autoplay = false; player.playVideo(); }
   }
 
   function onStateChange(e) {
-    var S = YT.PlayerState;
     switch (e.data) {
-      case S.PLAYING:
+      case PS.PLAYING:
         started = true;
         els.shell.classList.add('is-playing');
         els.shell.classList.remove('is-ended');
-        refreshMeta();
         break;
-      case S.PAUSED:
+      case PS.PAUSED:
         els.shell.classList.remove('is-playing');
         break;
-      case S.ENDED:
+      case PS.ENDED:
         els.shell.classList.remove('is-playing');
         els.shell.classList.add('is-ended');
-        break;
-      case S.CUED:
-        refreshMeta();
         break;
     }
     updateTime();
@@ -106,7 +113,6 @@
       case 100: msg = 'This video was removed or is private.'; break;
       case 101:
       case 150:
-      case 153:
         msg = 'The owner of this video doesn’t allow it to be played in other apps.'; break;
       default: msg = 'Something went wrong playing this video.';
     }
@@ -131,74 +137,49 @@
     updateUrl(video);
     fetchTitle(video.id);
 
-    if (!playerReady) {
-      autoplay = true;
-      clearTimeout(watchdog);
-      watchdog = setTimeout(function () {
-        // The video frame never answered our controls. Rather than show an error,
-        // fall back to YouTube's own controls so the video still plays.
-        if (!playerReady && player && current) {
-          els.shell.classList.add('native-mode');
-          player.useNativeControls(current.id, playerVars(current));
-          if (els.title.textContent === 'Loading…') els.title.textContent = 'YouTube video';
-        }
-      }, 10000);
-    }
-
-    if (els.shell.classList.contains('native-mode') && player) {
-      player.useNativeControls(video.id, playerVars(video));
-      return;
-    }
-
-    if (!player) {
-      createPlayer(video);
-    } else if (playerReady) {
+    if (nativeMode) { useNativePlayer(video); return; }
+    if (player && playerReady) {
       // Pasting a link is a click, so start playing right away
       player.loadVideoById({ videoId: video.id, startSeconds: video.start || 0 });
+      return;
     }
+    if (player) return;   // still starting up; onPlayerReady loads the latest link
+
+    autoplay = true;
+    LYT.loadApi(function (ok) {
+      if (current !== video && current) video = current;
+      if (player || nativeMode) return;
+      if (ok) createPlayer(video); else useNativePlayer(video);
+    });
   }
 
-  // Title lookup before playback starts (no API key needed). YouTube's own oEmbed
-  // endpoint doesn't allow browser requests from other sites, so use noembed.com,
-  // which proxies it with CORS enabled.
+  // Title lookup via YouTube's public oEmbed data. YouTube's own oEmbed endpoint
+  // doesn't allow browser requests from other sites, so use noembed.com, which
+  // relays it with CORS enabled.
   function fetchTitle(id) {
     if (!window.fetch) return;
     var u = 'https://noembed.com/embed?url=' +
       encodeURIComponent('https://www.youtube.com/watch?v=' + id);
     fetch(u).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
       if (!d || !d.title || !current || current.id !== id || !els.playerError.hidden) return;
-      var t = els.title.textContent;
-      if (t === 'Loading…' || t === 'YouTube video') {
-        els.title.textContent = d.title;
-        els.author.textContent = d.author_name || '';
-        document.title = d.title + ' · Lesson Player';
-      }
+      els.title.textContent = d.title;
+      els.author.textContent = d.author_name || '';
+      document.title = d.title + ' · Lesson Player';
+      saveRecent({ id: id, title: d.title, author: d.author_name || '' });
     }).catch(function () {});
-  }
-
-  function refreshMeta() {
-    if (!player || !player.getVideoData) return;
-    var data = player.getVideoData() || {};
-    if (data.video_id && data.video_id !== current.id) return; // stale data from previous video
-    if (data.title) {
-      els.title.textContent = data.title;
-      document.title = data.title + ' · Lesson Player';
-      els.author.textContent = data.author || '';
-      saveRecent({ id: current.id, title: data.title, author: data.author || '' });
-    }
   }
 
   // ---------- Controls ----------
 
-  function isReady() { return player && typeof player.getPlayerState === 'function'; }
+  function isReady() { return !!(player && playerReady && !nativeMode); }
 
   function togglePlay() {
     if (!isReady()) return;
     var state = player.getPlayerState();
-    if (state === YT.PlayerState.PLAYING || (state === YT.PlayerState.BUFFERING && started)) {
+    if (state === PS.PLAYING || (state === PS.BUFFERING && started)) {
       player.pauseVideo();
     } else {
-      if (state === YT.PlayerState.ENDED) player.seekTo(0, true);
+      if (state === PS.ENDED) player.seekTo(0, true);
       player.playVideo();
     }
   }
@@ -292,12 +273,15 @@
   function readRecent() {
     try {
       var list = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]');
-      return Array.isArray(list) ? list : [];
+      if (!Array.isArray(list)) return [];
+      var cutoff = Date.now() - RECENT_MAX_AGE;
+      return list.filter(function (x) { return x && x.id && x.savedAt > cutoff; });
     } catch (e) { return []; }
   }
 
   function saveRecent(item) {
     var list = readRecent().filter(function (x) { return x && x.id !== item.id; });
+    item.savedAt = Date.now();
     list.unshift(item);
     list = list.slice(0, RECENT_MAX);
     try { localStorage.setItem(RECENT_KEY, JSON.stringify(list)); } catch (e) {}
@@ -360,6 +344,11 @@
 
   els.input.addEventListener('input', function () { els.formError.hidden = true; });
 
+  els.clearRecent.addEventListener('click', function () {
+    try { localStorage.removeItem(RECENT_KEY); } catch (e) {}
+    renderRecent();
+  });
+
   els.btnPlay.addEventListener('click', togglePlay);
   els.btnBack.addEventListener('click', function () { seekBy(-10); });
   els.btnFwd.addEventListener('click', function () { seekBy(10); });
@@ -416,6 +405,7 @@
   // ---------- Boot ----------
 
   renderRecent();
+  LYT.loadApi(function () {});   // start loading the official player API early
 
   var params = new URLSearchParams(location.search);
   if (params.get('v')) {

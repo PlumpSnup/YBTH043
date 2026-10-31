@@ -28,6 +28,10 @@
       <button type="submit">Play</button>
     </form>
     <p id="form-error" class="form-error" role="alert" hidden></p>
+    <p class="consent">
+      By pressing Play you agree to our <a href="legal.html">Terms &amp; Privacy Policy</a>
+      and to the <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener">YouTube Terms of Service</a>.
+    </p>
 
     <section id="stage" class="stage" hidden>
       <div id="player-shell" class="player-shell" tabindex="0" aria-label="Video player">
@@ -111,10 +115,25 @@
     </section>
 
     <section id="recent-wrap" class="recent-wrap" hidden>
-      <h2>Recently watched</h2>
+      <div class="recent-head">
+        <h2>Recently watched</h2>
+        <button id="clear-recent" type="button" class="link-btn">Clear history</button>
+      </div>
       <ul id="recent" class="recent"></ul>
     </section>
   </main>
+
+  <footer class="site-footer">
+    <p>
+      Videos are played with YouTube’s embedded player and belong to their creators.
+      Lesson Player isn’t affiliated with or endorsed by YouTube or Google.
+    </p>
+    <p>
+      <a href="legal.html">Terms &amp; Privacy</a> ·
+      <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener">YouTube Terms of Service</a> ·
+      <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Google Privacy Policy</a>
+    </p>
+  </footer>
 
   <script src="parse.js"></script>
   <script src="yt.js"></script>
