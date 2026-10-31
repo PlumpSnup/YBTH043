@@ -7,8 +7,6 @@
   var els = {
     form: $('link-form'), input: $('link-input'), formError: $('form-error'),
     stage: $('stage'), empty: $('empty'), shell: $('player-shell'),
-    clickLayer: $('click-layer'), poster: $('poster'), posterImg: $('poster-img'),
-    bigPlay: $('big-play'), spinner: $('spinner'),
     playerError: $('player-error'), playerErrorText: $('player-error-text'),
     controls: $('controls'), seek: $('seek'), seekProgress: $('seek-progress'),
     seekBuffer: $('seek-buffer'), btnPlay: $('btn-play'), btnBack: $('btn-back'),
@@ -25,7 +23,6 @@
   var current = null;          // { id, start }
   var started = false;         // has the current video been played at least once
   var seeking = false;
-  var hideTimer = null;
   var tickTimer = null;
   var playerReady = false;
   var autoplay = false;        // start playing as soon as the player is ready
@@ -83,30 +80,18 @@
     switch (e.data) {
       case S.PLAYING:
         started = true;
-        els.poster.hidden = true;
-        els.spinner.hidden = true;
         els.shell.classList.add('is-playing');
         els.shell.classList.remove('is-ended');
         refreshMeta();
-        scheduleHide();
         break;
       case S.PAUSED:
         els.shell.classList.remove('is-playing');
-        showControls();
-        break;
-      case S.BUFFERING:
-        if (started) els.spinner.hidden = false;
         break;
       case S.ENDED:
         els.shell.classList.remove('is-playing');
         els.shell.classList.add('is-ended');
-        // Cover YouTube's end screen with our own replay poster
-        els.poster.hidden = false;
-        els.spinner.hidden = true;
-        showControls();
         break;
       case S.CUED:
-        els.spinner.hidden = true;
         refreshMeta();
         break;
     }
@@ -137,8 +122,6 @@
     els.stage.hidden = false;
     els.empty.hidden = true;
     els.shell.classList.remove('is-playing', 'is-ended');
-    els.poster.hidden = false;
-    els.posterImg.src = 'https://i.ytimg.com/vi/' + video.id + '/hqdefault.jpg';
     els.title.textContent = 'Loading…';
     els.author.textContent = '';
     els.seekProgress.style.width = '0%';
@@ -216,7 +199,6 @@
       player.pauseVideo();
     } else {
       if (state === YT.PlayerState.ENDED) player.seekTo(0, true);
-      if (!started) els.spinner.hidden = false;
       player.playVideo();
     }
   }
@@ -227,7 +209,6 @@
     var t = Math.max(0, Math.min(dur, player.getCurrentTime() + delta));
     player.seekTo(t, true);
     updateTime();
-    showControls();
   }
 
   function applyVolume() {
@@ -249,7 +230,6 @@
       player.mute();
       els.shell.classList.add('is-muted');
     }
-    showControls();
   }
 
   function toggleFullscreen() {
@@ -291,26 +271,9 @@
     tickTimer = setInterval(updateTime, 250);
   }
 
-  // Auto-hide controls while playing
-  function showControls() {
-    els.shell.classList.add('controls-visible');
-    scheduleHide();
-  }
-
-  function scheduleHide() {
-    clearTimeout(hideTimer);
-    hideTimer = setTimeout(function () {
-      if (els.shell.classList.contains('is-playing') && !seeking) {
-        els.shell.classList.remove('controls-visible');
-      }
-    }, 2500);
-  }
-
   function showPlayerError(msg) {
     els.playerErrorText.textContent = msg;
     els.playerError.hidden = false;
-    els.poster.hidden = true;
-    els.spinner.hidden = true;
     els.title.textContent = 'Video unavailable';
   }
 
@@ -397,10 +360,6 @@
 
   els.input.addEventListener('input', function () { els.formError.hidden = true; });
 
-  els.bigPlay.addEventListener('click', function (e) { e.stopPropagation(); togglePlay(); });
-  els.poster.addEventListener('click', togglePlay);
-  els.clickLayer.addEventListener('click', togglePlay);
-  els.clickLayer.addEventListener('dblclick', toggleFullscreen);
   els.btnPlay.addEventListener('click', togglePlay);
   els.btnBack.addEventListener('click', function () { seekBy(-10); });
   els.btnFwd.addEventListener('click', function () { seekBy(10); });
@@ -426,14 +385,8 @@
       player.seekTo((els.seek.value / 1000) * dur, true);
     }
     seeking = false;
-    showControls();
   });
 
-  els.shell.addEventListener('mousemove', showControls);
-  els.shell.addEventListener('touchstart', showControls, { passive: true });
-  els.shell.addEventListener('mouseleave', function () {
-    if (els.shell.classList.contains('is-playing')) els.shell.classList.remove('controls-visible');
-  });
 
   document.addEventListener('keydown', function (e) {
     if (els.stage.hidden || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -443,7 +396,7 @@
       case ' ':
       case 'k': case 'K':
         if (tag === 'button' && e.key === ' ') return; // let buttons handle Space
-        e.preventDefault(); togglePlay(); showControls(); break;
+        e.preventDefault(); togglePlay(); break;
       case 'j': case 'J': seekBy(-10); break;
       case 'l': case 'L': seekBy(10); break;
       case 'ArrowLeft': if (tag !== 'input') { e.preventDefault(); seekBy(-5); } break;
