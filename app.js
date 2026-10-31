@@ -28,6 +28,10 @@
   var seeking = false;
   var hideTimer = null;
   var tickTimer = null;
+  var playerReady = false;
+  var autoplay = false;        // start playing as soon as the player is ready
+  var watchdog = null;         // detects a player that never finishes loading
+  var createdWithId = null;    // video the player was first created with
 
   // ---------- YouTube IFrame API ----------
 
@@ -51,8 +55,8 @@
   };
 
   function createPlayer(video) {
+    createdWithId = video.id;
     player = new YT.Player('yt-target', {
-      host: 'https://www.youtube-nocookie.com',
       videoId: video.id,
       playerVars: {
         controls: 0,          // hide YouTube's control bar — we draw our own
@@ -74,10 +78,20 @@
   }
 
   function onPlayerReady() {
+    playerReady = true;
+    clearTimeout(watchdog);
     applyVolume();
     player.setPlaybackRate(parseFloat(els.speed.value));
-    refreshMeta();
     startTick();
+    // Another link may have been pasted while the player was starting up
+    if (current && current.id !== createdWithId) {
+      autoplay = false;
+      player.loadVideoById({ videoId: current.id, startSeconds: current.start || 0 });
+      return;
+    }
+    refreshMeta();
+    if (els.title.textContent === 'Loading…') els.title.textContent = 'YouTube video';
+    if (autoplay) { autoplay = false; player.playVideo(); }
   }
 
   function onStateChange(e) {
@@ -148,28 +162,43 @@
     els.seek.value = 0;
     els.time.textContent = '0:00 / 0:00';
     updateUrl(video);
-    fetchOEmbed(video.id);
+    fetchTitle(video.id);
+
+    if (!playerReady) {
+      autoplay = true;
+      clearTimeout(watchdog);
+      watchdog = setTimeout(function () {
+        if (!playerReady) {
+          showPlayerError('The YouTube player didn’t load. If you use an ad blocker or privacy ' +
+            'extension, allow youtube.com on this site and reload the page.');
+        }
+      }, 15000);
+    }
 
     if (!apiReady) { pendingLoad = video; return; }
 
     if (!player) {
       createPlayer(video);
-    } else {
-      player.cueVideoById({ videoId: video.id, startSeconds: video.start || 0 });
+    } else if (playerReady) {
+      // Pasting a link is a click, so start playing right away
+      player.loadVideoById({ videoId: video.id, startSeconds: video.start || 0 });
     }
   }
 
-  // Best-effort title lookup before playback starts (no API key needed).
-  function fetchOEmbed(id) {
+  // Title lookup before playback starts (no API key needed). YouTube's own oEmbed
+  // endpoint doesn't allow browser requests from other sites, so use noembed.com,
+  // which proxies it with CORS enabled.
+  function fetchTitle(id) {
     if (!window.fetch) return;
-    var u = 'https://www.youtube.com/oembed?format=json&url=' +
+    var u = 'https://noembed.com/embed?url=' +
       encodeURIComponent('https://www.youtube.com/watch?v=' + id);
     fetch(u).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
-      if (!d || !current || current.id !== id || !els.playerError.hidden) return;
-      if (els.title.textContent === 'Loading…') {
-        els.title.textContent = d.title || '';
+      if (!d || !d.title || !current || current.id !== id || !els.playerError.hidden) return;
+      var t = els.title.textContent;
+      if (t === 'Loading…' || t === 'YouTube video') {
+        els.title.textContent = d.title;
         els.author.textContent = d.author_name || '';
-        document.title = (d.title || 'Lesson Player') + ' · Lesson Player';
+        document.title = d.title + ' · Lesson Player';
       }
     }).catch(function () {});
   }
