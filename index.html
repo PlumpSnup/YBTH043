@@ -28,8 +28,19 @@
       <button type="submit">Play</button>
     </form>
     <p id="form-error" class="form-error" role="alert" hidden></p>
+    <form id="search-form" class="link-form search-form" autocomplete="off" role="search">
+      <label for="search-input" class="sr-only">Search for a YouTuber</label>
+      <input
+        id="search-input"
+        type="search"
+        placeholder="…or search for a YouTuber, e.g. Mark Rober or @MarkRober"
+        spellcheck="false"
+        maxlength="100"
+      />
+      <button type="submit" class="secondary">Search</button>
+    </form>
     <p class="consent">
-      By pressing Play you agree to our <a href="legal.html">Terms &amp; Privacy Policy</a>
+      By using Lesson Player you agree to our <a href="legal.html">Terms &amp; Privacy Policy</a>
       and to the <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener">YouTube Terms of Service</a>.
     </p>
 
@@ -109,6 +120,30 @@
       </div>
     </section>
 
+    <section id="browse" class="browse" hidden aria-live="polite">
+      <p id="browse-status" class="browse-status" hidden></p>
+
+      <div id="channel-results" class="channel-results" hidden>
+        <h2>Channels</h2>
+        <ul id="channel-list" class="channel-list"></ul>
+      </div>
+
+      <div id="video-results" class="video-results" hidden>
+        <div class="browse-head">
+          <img id="channel-avatar" class="channel-avatar" alt="" />
+          <div>
+            <h2 id="channel-name"></h2>
+            <a id="channel-link" class="channel-link" target="_blank" rel="noopener">View channel on YouTube</a>
+          </div>
+          <button id="back-to-channels" type="button" class="link-btn">← Back to channels</button>
+        </div>
+        <ul id="video-list" class="video-grid"></ul>
+        <button id="load-more" type="button" class="load-more" hidden>Load more videos</button>
+      </div>
+
+      <p class="attribution">Channel and video information from YouTube.</p>
+    </section>
+
     <section id="empty" class="empty">
       <h2>Paste a link to start a lesson</h2>
       <p>Works with <code>youtube.com/watch?v=…</code>, <code>youtu.be/…</code>, Shorts, and embed links.</p>
@@ -138,5 +173,6 @@
   <script src="parse.js"></script>
   <script src="yt.js"></script>
   <script src="app.js"></script>
+  <script src="browse.js"></script>
 </body>
 </html>

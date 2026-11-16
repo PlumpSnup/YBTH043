@@ -402,6 +402,20 @@
   document.addEventListener('fullscreenchange', onFsChange);
   document.addEventListener('webkitfullscreenchange', onFsChange);
 
+  // Lets browse.js (YouTuber search) play a video in this player.
+  window.LessonPlayer = {
+    play: function (id, meta) {
+      loadVideo({ id: id, start: 0 });
+      if (meta && meta.title) {
+        els.title.textContent = meta.title;
+        els.author.textContent = meta.author || '';
+        document.title = meta.title + ' · Lesson Player';
+      }
+      els.stage.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    },
+    currentId: function () { return current && current.id; }
+  };
+
   // ---------- Boot ----------
 
   renderRecent();

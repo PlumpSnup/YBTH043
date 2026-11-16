@@ -11,6 +11,7 @@ Videos play in YouTube's embedded player, in privacy-enhanced mode (`youtube-noc
 - **Minimum player size** of 200×200 px.
 - **Terms and privacy.** `legal.html` links to the YouTube Terms of Service and the Google Privacy Policy, says that users agree to be bound by YouTube's terms, and explains what data is stored. A notice next to the Play button links to both.
 - **Stored data.** "Recently watched" keeps video IDs and titles in the browser only, deletes them after 30 days, and has a Clear history button.
+- **YouTube Data API** for search, called from the server so the key stays secret. Channel and video information is shown as YouTube returns it and cached for at most 6 hours.
 - **No downloading or re-hosting** of videos.
 
 ## Features
@@ -18,6 +19,7 @@ Videos play in YouTube's embedded player, in privacy-enhanced mode (`youtube-noc
 - Accepts `youtube.com/watch?v=…`, `youtu.be/…`, Shorts, embed, live and mobile links, plus `t=` start times
 - Custom controls: play/pause, ±10s, seek bar with buffer indicator, volume/mute, speed (0.5×–2×), fullscreen
 - Keyboard shortcuts: `Space`/`K`, `J`/`L`, `←`/`→`, `M`, `F`
+- **YouTuber search:** search for a channel by name or `@handle`, browse its latest videos, and click one to play it here (or copy its link)
 - Shareable URLs (`?v=VIDEO_ID`)
 - "Recently watched" list, stored in the browser for up to 30 days, with a Clear history button
 - Friendly errors for private/removed videos and videos whose owner disabled embedding
@@ -25,7 +27,7 @@ Videos play in YouTube's embedded player, in privacy-enhanced mode (`youtube-noc
 
 ## Run locally
 
-No build step and no API keys. Serve the folder over HTTP (the YouTube player won't work from `file://`):
+No build step. Serve the folder over HTTP (the YouTube player won't work from `file://`):
 
 ```bash
 python3 -m http.server 8000
@@ -35,7 +37,17 @@ Then open http://localhost:8000.
 
 ## Deploy
 
-It's a static site. On Vercel, import the repo with framework preset **Other**, no build command, and output directory `.`. No environment variables are needed.
+It's a static site plus one Vercel serverless function (`api/youtube.js`). On Vercel, import the repo with framework preset **Other**, no build command, and output directory `.`.
+
+### Environment variable
+
+| Name | Needed for | How to get it |
+|---|---|---|
+| `YOUTUBE_API_KEY` | YouTuber search | Google Cloud Console → create a project → enable **YouTube Data API v3** → Credentials → Create API key (restrict it to YouTube Data API v3) |
+
+Without the key, everything works except search, which shows a "not set up yet" message.
+
+**Daily quota:** 10,000 free units/day. A name search costs 100 units, a `@handle` lookup or a page of 24 videos costs 1–2. Results are cached on Vercel's CDN for 6 hours, so repeat lookups are free.
 
 ## Files
 
@@ -44,4 +56,6 @@ It's a static site. On Vercel, import the repo with framework preset **Other**, 
 - `parse.js`: turns a YouTube link into a video ID and start time
 - `yt.js`: loads YouTube's official IFrame Player API and builds embed URLs
 - `app.js`: player logic and custom controls
+- `browse.js`: YouTuber search, channel list and video grid
+- `api/youtube.js`: serverless function that calls the YouTube Data API with the secret key
 - `legal.html`: Terms of Use and Privacy Policy
