@@ -138,6 +138,7 @@ footer p { margin: 0 0 6px; }
               <label class="btn" for="modDir">Choose folder<input type="file" id="modDir" webkitdirectory multiple></label>
             </div>
             <span class="picked" id="modName"></span>
+            <div class="row" id="physRow" hidden><button type="button" id="physBtn">Save physics files only</button><span class="status" id="physStatus"></span></div>
           </div>
         </div>
       </div>
@@ -267,6 +268,7 @@ footer p { margin: 0 0 6px; }
 
   async function reload() {
     $('convertBtn').disabled = true;
+    $('physRow').hidden = !state.mod;
     setStatus('Reading physics files…');
     try {
       state.lib = await J2R.loadLibrary([state.mod, ...state.extras], (m) => setStatus(m));
@@ -349,14 +351,31 @@ footer p { margin: 0 0 6px; }
 
   async function save() {
     const r = state.result; if (!r) return;
-    const bytes = J2R.buildModZip(r);
-    const filename = `${r.fileBase}.zip`;
-    const msg = $('saveStatus');
+    await saveFile(`${r.fileBase}.zip`, J2R.buildModZip(r), $('saveStatus'));
+  }
+
+  // A small zip of just the mod's physics files (.jbeam, .pc, info .json): easy to share for bug reports.
+  $('physBtn').addEventListener('click', async () => {
+    const msg = $('physStatus');
+    msg.textContent = 'Collecting…';
+    try {
+      const wanted = state.mod.entries.filter((e) => /\.(jbeam|pc)$/i.test(e.path) || /(^|\/)info[^/]*\.json$/i.test(e.path));
+      const files = [];
+      for (const e of wanted) files.push({ path: e.path, data: await e.read() });
+      if (!files.length) { msg.textContent = 'No physics files found in this mod.'; return; }
+      const bytes = J2R.makeZip(files);
+      const base = String(state.mod.name || 'mod').replace(/\.zip$/i, '').replace(/[^A-Za-z0-9_\-]+/g, '_');
+      msg.textContent = '';
+      await saveFile(`${base}_physics_only.zip`, bytes, msg, `${files.length} files, ${(bytes.length / 1048576).toFixed(2)} MB`);
+    } catch (err) { msg.textContent = `Couldn't collect the files: ${err.message}`; }
+  });
+
+  async function saveFile(filename, bytes, msg, savedNote) {
     msg.textContent = '';
     if (window.claude && window.claude.use) {
       await downloadsReady;
       if (downloads) {
-        try { await downloads.save({ filename, data: new Blob([bytes]) }); msg.textContent = 'Saved.'; }
+        try { await downloads.save({ filename, data: new Blob([bytes]) }); msg.textContent = savedNote ? `Saved (${savedNote}).` : 'Saved.'; }
         catch (e) { msg.textContent = e && e.code === 'declined' ? 'Download cancelled.' : `Couldn't save: ${(e && e.message) || 'unavailable here'}`; }
         return;
       }
