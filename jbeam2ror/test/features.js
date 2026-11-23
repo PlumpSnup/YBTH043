@@ -48,6 +48,9 @@ for (const [S, s, y] of [['F', 'f', -1.3], ['R', 'r', 1.3]]) {
       ...['l', 'r'].map((d) => [`${s}h${d}`, `${s}t${d}`, { precompressionRange: 0.08, shortBoundRange: 0.1, longBoundRange: 0.12 }]),
       { beamType: '|BOUNDED', beamSpring: 0, beamDamp: 50, beamLimitSpring: 1500000, beamLimitDamp: 100 },
       ...['l', 'r'].map((d) => [`${s}t${d}`, `${s}w2${d}`, { shortBoundRange: 0.005, longBoundRange: 0.01 }]),
+      { beamType: '|SUPPORT', beamSpring: 2501000, beamDamp: 150, beamPrecompression: 0.7 },
+      ...['l', 'r'].map((d) => [`${s}h${d}`, `t${S === 'F' ? 0 : 2}${d}`]),
+      { beamPrecompression: 1 },
       { beamType: '|NORMAL', beamSpring: 20000, beamDamp: 10 },
       ...['l', 'r'].map((d) => [`${s}c${d}`, `${s}t${d}`]),
       { beamType: '|NORMAL' }],
@@ -89,6 +92,8 @@ for (const [S, s, y] of [['F', 'f', -1.3], ['R', 'r', 1.3]]) {
   check(spring && spring.hardK > 200000, 'bump-stop stiffness carried into the RoR shock limit');
   check(D.beams.some((x) => x.a === 'ftl' && x.b === 'fw2l' && x.spring === 1500000), 'limiter with almost no free play becomes a stiff beam');
   check(/^slidenodes$/m.test(r.truck) && /, s900000, b1000000000, t0$/m.test(r.truck), 'slidenodes written for RoR');
+  const stop = D.shocks.find((x) => x.stop && x.a === 'fhl');
+  check(stop && Math.abs(stop.sb - 0.3) < 1e-9 && stop.spring === 0 && stop.precomp === 1, 'pre-shortened |SUPPORT beam becomes a stop that is slack until squashed to 70 %');
   check(r.report.selfTest.stable, 'drop test passes');
   check(require('./validate-truck.js').validate(r.truck).ok, '.truck passes the syntax checks');
   console.log(failed ? `\n${failed} check(s) failed` : '\nAll feature checks passed');

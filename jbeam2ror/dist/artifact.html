@@ -1025,7 +1025,7 @@ footer p { margin: 0 0 6px; }
           const key = [a, b].map(String).sort().join('|');
           if (!beamKeys.has(key)) {
             beamKeys.add(key);
-            beams.push({ a: String(a), b: String(b), spring: limitK, damp: Math.max(damp, limitD), deform: bp.deform, strength: bp.strength, support: false });
+            beams.push({ a: String(a), b: String(b), spring: limitK, damp: Math.max(damp, limitD), deform: bp.deform, strength: bp.strength, support: false, limiter: { part, sbM, lbM } });
           }
           continue;
         }
@@ -1039,6 +1039,19 @@ footer p { margin: 0 0 6px; }
           precomp: Math.min(3, Math.max(0.2, precomp)),
           hardK: Math.min(5e8, hard(bp.spring, limitK)), hardD: Math.min(5e5, hard(damp, limitD)),
           deform: bp.deform, strength: bp.strength,
+        });
+        continue;
+      }
+      if (type === 'SUPPORT' && precomp < 0.999) {
+        // A push-only stop that is slack until squashed to precomp * L (BeamNG crush and
+        // steering-lock stops). RoR support beams can't be pre-shortened, so use a RoR
+        // shock: free inside the bounds, then stiffening to BeamNG's spring past the stop.
+        const stopM = (1 - precomp) * L;
+        shocks.push({
+          a: String(a), b: String(b), spring: 0, damp: 0,
+          sb: Math.min(1, 1 - precomp), lb: 100, precomp: 1,
+          hardK: Math.min(5e8, bp.spring / Math.max(0.01, stopM)), hardD: Math.min(5e5, bp.damp / Math.max(0.01, stopM)),
+          deform: bp.deform, strength: bp.strength, stop: true,
         });
         continue;
       }
@@ -1065,13 +1078,53 @@ footer p { margin: 0 0 6px; }
           f = inF * (ext + ret) / 2;
         }
         if (!isFinite(f)) f = 0.1 * Math.sign(inF || 1);
-        steeringHydros.push({ a: String(a), b: String(b), bngFactor: f, ...bp });
+        steeringHydros.push({ a: String(a), b: String(b), bngFactor: f, explicitFactor: props.factor !== undefined, ...bp });
       } else {
         beams.push({ a: String(a), b: String(b), ...bp, support: false });
       }
     }
 
     // -- unsupported sections ------------------------------------------------
+    const pairKey = (a, b) => [String(a), String(b)].sort().join('|');
+    // -- latches: BeamNG couplers that start coupled (doors, hood, tailgate) ------
+    // RoR has no auto-couplers, so each becomes breakable beams with the coupler's
+    // strength. Coupler node pairs usually sit on top of each other; then the door-side
+    // node is tied to the body-side node's neighbours instead.
+    let latches = 0;
+    {
+      const adjB = new Map();
+      for (const b of beams) {
+        if (!adjB.has(b.a)) adjB.set(b.a, new Set()); if (!adjB.has(b.b)) adjB.set(b.b, new Set());
+        adjB.get(b.a).add(b.b); adjB.get(b.b).add(b.a);
+      }
+      const seen = new Set();
+      for (const { entry } of order) {
+        for (const v of Object.values(entry.part)) {
+          if (!isDict(v) || !Array.isArray(v.couplerNodes) || !isHeaderRow(v.couplerNodes[0])) continue;
+          const h = v.couplerNodes[0].map((x) => x.replace(/:$/, ''));
+          const i1 = h.indexOf('cid1'), i2 = h.indexOf('cid2'), iS = h.indexOf('autoCouplingStrength');
+          if (i1 < 0 || i2 < 0) continue;
+          for (const raw of v.couplerNodes.slice(1)) {
+            if (!Array.isArray(raw)) continue;
+            const row = evalValue(raw);
+            const a = String(row[i1]), b = String(row[i2]);
+            if (!hasNode(a) || !hasNode(b) || a === b || seen.has(pairKey(a, b))) continue;
+            seen.add(pairKey(a, b));
+            const strength = Math.max(5000, num(row[iS], 30000));
+            const latch = (x, y) => beams.push({ a: x, b: y, spring: 1001000, damp: 50, deform: BIG, strength, support: false, latch: true });
+            const pa = nodes.get(a).pos, pb = nodes.get(b).pos;
+            if (v3.len(v3.sub(pa, pb)) > 0.003) { latch(a, b); latches++; continue; }
+            const doorSide = adjB.get(b) || new Set();
+            const cands = [...(adjB.get(a) || [])].filter((n2) => n2 !== b && !doorSide.has(n2))
+              .map((n2) => [n2, v3.len(v3.sub(nodes.get(n2).pos, pb))]).filter((x) => x[1] > 0.02).sort((x, y) => x[1] - y[1]).slice(0, 3);
+            for (const [n2] of cands) latch(b, n2);
+            if (cands.length) latches++;
+          }
+        }
+      }
+    }
+    if (latches) warn(`${latches} latch(es) (doors, hood, tailgate) converted to breakable beams; they hold shut like in BeamNG but can't be opened and re-closed`);
+
     // -- slidenodes on rails (e.g. spring seats sliding along a strut) -----------
     const rails = {};
     for (const { entry } of order) {
@@ -1079,7 +1132,6 @@ footer p { margin: 0 0 6px; }
       if (isDict(r0)) for (const [rn, rv] of Object.entries(evalValue(r0))) if (isDict(rv)) rails[rn] = rv;
     }
     const slidenodes = [];
-    const pairKey = (a, b) => [String(a), String(b)].sort().join('|');
     for (const { cols, props } of rowsOf('slidenodes')) {
       const id = cols.id, rail = rails[String(cols.railName)];
       if (!hasNode(id) || !rail) continue;
@@ -1287,7 +1339,8 @@ footer p { margin: 0 0 6px; }
         const lever = Math.max(0.03, Math.abs(yaw));
         const wantRight = fwdOf(best.center) >= 0 ? -1 : 1; // front wheels yaw right; rear-steer opposite
         // RoR: steering right => length = L0 * (1 - factor). Aim for ~30 degrees of lock.
-        let mag = Math.min(0.5, Math.max(0.02, (lever * 0.52) / L0));
+        // amount: the mod's own factor when it gives one, else ~30 degrees of lock from geometry
+        let mag = h.explicitFactor && isFinite(h.bngFactor) && Math.abs(h.bngFactor) > 0.005 ? Math.min(0.5, Math.abs(h.bngFactor)) : Math.min(0.5, Math.max(0.02, (lever * 0.52) / L0));
         factor = (Math.sign(yaw) === wantRight || yaw === 0) ? mag : -mag;
       } else {
         factor = Math.max(-0.5, Math.min(0.5, -h.bngFactor));
@@ -1654,7 +1707,7 @@ footer p { margin: 0 0 6px; }
     };
     const fileName = `${fileBase}.truck`;
     return {
-      _debug: opts.debug ? { nodes, beams, shocks, steeringHydros, wheels } : undefined,
+      _debug: opts.debug ? { nodes, beams, shocks, steeringHydros, steering, wheels, slidenodes, up } : undefined,
       truck,
       fileBase,
       files: [
@@ -1672,7 +1725,8 @@ footer p { margin: 0 0 6px; }
    * two rings of tread nodes with tyre/rim beams, the spokes being RoR shocks that
    * stiffen toward the engine's default beam values when stretched.
    */
-  function simulateDrop(nodes, beams, shocks, hydros, wheels, up, slidenodes) {
+  function simulateDrop(nodes, beams, shocks, hydros, wheels, up, slidenodes, extra) {
+    extra = extra || {};
     const ids = [...nodes.keys()];
     const ix = new Map(ids.map((id, i) => [id, i]));
     const nChassis = ids.length;
@@ -1734,19 +1788,31 @@ footer p { margin: 0 0 6px; }
       if (L < 1e-6) return;
       springs.push({ i, j, k, c, L0: L * precomp, Lr: L, deform, shock: shock || null });
     };
-    for (const b of beams) addSpring(b.a, b.b, b.spring, b.damp, 1, b.deform);
+    for (const b of beams) { addSpring(b.a, b.b, b.spring, b.damp, 1, b.deform); if (b.support && springs.length) springs[springs.length - 1].support = true; }
     for (const s of shocks) addSpring(s.a, s.b, s.spring, s.damp, s.precomp, Infinity, s);
+    const hydroStart = springs.length;
     for (const h of hydros) addSpring(h.a, h.b, h.spring, h.damp, 1, h.deform);
+    const hydroSprings = springs.slice(hydroStart).map((sp, q) => ({ sp, factor: hydros[q] && hydros[q].factor || 0, L: sp.L0 }));
     const slides = (slidenodes || []).map((sn) => ({ i: ix.get(sn.id), rail: sn.rail.map((r) => ix.get(r)), k: sn.spring }));
     // Ground: lowest wheel bottom (or lowest node) sits 2 cm above y=0
     let ground = Infinity;
     for (let i = 0; i < n; i++) ground = Math.min(ground, pos[i * 3 + 1]);
     ground -= 0.02;
     const dt = PHYSICS_DT, g = 9.81;
-    const steps = Math.round(2.5 / dt);
-    let maxSpeedLate = 0, blew = false, firstBlow = null;
+    const steps = Math.round((extra.seconds || 2.5) / dt);
+    const probe = [];
+    let fastest = null, maxSpeedLate = 0, maxSpeedMid = 0, blew = false, firstBlow = null;
     const energy = new Float64Array(n);
     for (let s = 0; s < steps; s++) {
+      if (extra.steer !== undefined && s * dt > 1) {
+        // RoR: steering right (cstate > 0) sets L = L0 * (1 - cstate * factor); ramp over 0.5 s
+        const cs = extra.steer * Math.min(1, (s * dt - 1) / 0.5);
+        for (const h of hydroSprings) h.sp.L0 = h.L * (1 - cs * h.factor);
+      }
+      if (extra.probe && s % 200 === 0) {
+        const [pa, pb] = extra.probe.map((id) => ix.get(id));
+        probe.push([+(s * dt).toFixed(2), Math.atan2(pos[pb * 3 + 2] - pos[pa * 3 + 2], pos[pb * 3] - pos[pa * 3]) * 180 / Math.PI, pos[pa * 3 + 1], pos[pa * 3], Math.hypot(pos[pb * 3] - pos[pa * 3], pos[pb * 3 + 1] - pos[pa * 3 + 1], pos[pb * 3 + 2] - pos[pa * 3 + 2])]);
+      }
       frc.fill(0);
       for (let i = 0; i < n; i++) {
         frc[i * 3 + 1] -= mass[i] * g;
@@ -1786,6 +1852,7 @@ footer p { margin: 0 0 6px; }
         const vr = (vel[j3] - vel[i3]) * ux + (vel[j3 + 1] - vel[i3 + 1]) * uy + (vel[j3 + 2] - vel[i3 + 2]) * uz;
         let k = sp.k, c = sp.c;
         const diff = L - sp.L0;
+        if (sp.support && diff > 0) { k = 0; c *= 0.1; }
         if (sp.shock) {
           // RoR SHOCK1: past a bound, blend toward the hard values by the overshoot in metres
           const lo = sp.shock.sb * sp.L0, hi = sp.shock.lb * sp.L0;
@@ -1812,7 +1879,8 @@ footer p { margin: 0 0 6px; }
           const sp2 = vel[i * 3] ** 2 + vel[i * 3 + 1] ** 2 + vel[i * 3 + 2] ** 2;
           if (!isFinite(sp2) || sp2 > 60 * 60) { if (!blew) { blew = true; firstBlow = i < nChassis ? { node: ids[i], t: +(s * dt).toFixed(4) } : { node: null, wheel: owner[i], t: +(s * dt).toFixed(4) }; } }
           energy[i] = Math.max(energy[i], isFinite(sp2) ? sp2 : 1e30);
-          if (s > steps * 0.7) maxSpeedLate = Math.max(maxSpeedLate, Math.sqrt(sp2) || Infinity);
+          if (s > steps * 0.7) { const spd = Math.sqrt(sp2) || Infinity; if (spd > maxSpeedLate) { maxSpeedLate = spd; fastest = i < nChassis ? ids[i] : 'wheel ' + owner[i]; } }
+          else if (s > steps * 0.4) maxSpeedMid = Math.max(maxSpeedMid, Math.sqrt(sp2) || Infinity);
         }
         if (blew) break;
       }
@@ -1827,13 +1895,24 @@ footer p { margin: 0 0 6px; }
       if (isFinite(strain)) maxStrain = Math.max(maxStrain, strain); else maxStrain = Infinity;
       if (!(strain < 0.5)) collapsed++;
     }
-    const stable = !blew && maxSpeedLate < 3 && collapsed === 0;
+    // Unstable = blew up, collapsed, or motion still growing late in the test. Parts that
+    // are free to swing (doors, hood) or a car still gently settling are not instability.
+    const growing = maxSpeedLate > 1.5 && maxSpeedLate > maxSpeedMid * 1.25;
+    const stable = !blew && collapsed === 0 && maxSpeedLate < 15 && !growing;
+    let watched = null;
+    if (extra.watch) {
+      const ws = new Set(extra.watch.map((id) => ix.get(id)));
+      watched = springs.filter((sp) => (ws.has(sp.i) || ws.has(sp.j)) && sp.i < nChassis && sp.j < nChassis).map((sp) => {
+        const L = Math.hypot(pos[sp.j * 3] - pos[sp.i * 3], pos[sp.j * 3 + 1] - pos[sp.i * 3 + 1], pos[sp.j * 3 + 2] - pos[sp.i * 3 + 2]);
+        return { a: ids[sp.i], b: ids[sp.j], k: sp.k, dL: L - sp.Lr, L0shift: sp.L0 - sp.Lr * (sp.shock ? sp.shock.precomp : 1), shock: !!sp.shock, force: sp.k * (L - sp.L0) };
+      }).sort((x, y) => Math.abs(y.force) - Math.abs(x.force));
+    }
     // Nodes with the most kinetic energy are the likely culprits
     const order = [...energy.keys()].sort((a, b) => energy[b] - energy[a]);
     const hotNodes = stable ? [] : order.filter((i) => i < nChassis).slice(0, Math.max(1, Math.ceil(nChassis * 0.03))).map((i) => ids[i]);
     let minY = Infinity;
     for (let i = 0; i < n; i++) minY = Math.min(minY, pos[i * 3 + 1]);
-    return { stable, firstBlow, maxSpeedLate: +maxSpeedLate.toFixed(3), maxStrain: +maxStrain.toFixed(3), collapsedBeams: collapsed, hotNodes, seconds: 2.5 };
+    return { stable, fastest, watched, probe, firstBlow, maxSpeedMid: +maxSpeedMid.toFixed(3), maxSpeedLate: +maxSpeedLate.toFixed(3), maxStrain: +maxStrain.toFixed(3), collapsedBeams: collapsed, hotNodes, seconds: 2.5 };
   }
 
   /**
