@@ -7,7 +7,7 @@ const fs = require('fs');
 function validate(text) {
   const errors = [];
   const lines = text.split(/\r?\n/);
-  const minArgs = { nodes: 4, beams: 2, shocks: 7, hydros: 3, wheels: 14, cameras: 3, cinecam: 11, engine: 7, engoption: 1, torquecurve: 2, brakes: 1, globals: 2, minimass: 1, texcoords: 3, cab: 3 };
+  const minArgs = { nodes: 4, beams: 2, shocks: 7, hydros: 3, wheels: 14, cameras: 3, cinecam: 11, engine: 7, engoption: 1, torquecurve: 2, brakes: 1, globals: 2, minimass: 1, texcoords: 3, cab: 3, slidenodes: 3 };
   const nodeRefCols = { beams: [0, 1], shocks: [0, 1], hydros: [0, 1], wheels: [3, 4, 5, 8], cameras: [0, 1, 2], cinecam: [3, 4, 5, 6, 7, 8, 9, 10], texcoords: [0], cab: [0, 1, 2] };
   const keywords = new Set([...Object.keys(minArgs), 'submesh', 'end', 'enable_advanced_deformation', 'set_beam_defaults']);
   let section = null, nodeCount = 0, sawTitle = false, ended = false;
@@ -43,6 +43,14 @@ function validate(text) {
       if (args[5] !== undefined && !(+args[5] > 0)) errors.push(`line ${ln + 1}: node mass must be > 0`);
     }
     if (section === 'texcoords') texNodes.add(args[0]);
+    if (section === 'slidenodes') {
+      // node, rail nodes..., then options starting with a letter (S spring, B break, T tolerance ...)
+      const nodeArgs = args.filter((x) => /^\d+$/.test(x));
+      const opt = args.filter((x) => !/^\d+$/.test(x));
+      if (nodeArgs.length < 3) errors.push(`line ${ln + 1}: slidenode needs a node and at least 2 rail nodes`);
+      for (const o of opt) if (!/^[SBTRGDC][\w.]*$/i.test(o) || (/^[SBTRGD]/i.test(o) && isNaN(+o.slice(1)))) errors.push(`line ${ln + 1}: bad slidenode option "${o}"`);
+      for (const x of nodeArgs) refs.push([ln + 1, x, false]);
+    }
     if (section === 'cab') for (const c of [0, 1, 2]) if (!texNodes.has(args[c])) errors.push(`line ${ln + 1}: cab node ${args[c]} has no texcoord`);
     if (section === 'engine' && !args.slice(6).some((g) => +g > 0)) errors.push(`line ${ln + 1}: engine has no forward gear`);
     if (section === 'wheels') {

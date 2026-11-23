@@ -145,8 +145,8 @@ footer p { margin: 0 0 6px; }
       <div class="step">
         <div class="num">2</div>
         <div>
-          <h2>Add BeamNG's shared parts <small style="font:400 14px var(--f-body);color:var(--muted)">(usually needed)</small></h2>
-          <p>Most mods borrow tires, wheels and engines from the game's own files. Add <span class="mono">BeamNG.drive/content/vehicles/common.zip</span>. If the mod is a new configuration for a car that came with the game, add that car's zip too. Only the physics files inside are read, so large zips are fine.</p>
+          <h2>Add BeamNG's shared parts <small style="font:400 14px var(--f-body);color:var(--muted)">(optional)</small></h2>
+          <p>Optional if you don't have BeamNG: borrowed tires and wheels are rebuilt from their names. If you do have it, add <span class="mono">BeamNG.drive/content/vehicles/common.zip</span>. If the mod is a new configuration for a car that came with the game, add that car's zip too. Only the physics files inside are read, so large zips are fine.</p>
           <div class="drop" id="dropExtra">
             <div class="row">
               <label class="btn" for="extraZip">Add .zip files<input type="file" id="extraZip" accept=".zip" multiple></label>
@@ -180,7 +180,7 @@ footer p { margin: 0 0 6px; }
   </div>
 
   <footer>
-    <p>What carries over: the soft-body structure with BeamNG's node masses and beam stiffness, damping and deformation; springs and dampers; collision triangles; wheel size, mass and grip; brakes; steering direction (worked out from the steering geometry); and the engine torque curve, gears and final drive.</p>
+    <p>What carries over: the soft-body structure with BeamNG's node masses and beam stiffness, damping and deformation; springs and dampers; collision triangles; wheel size, mass and grip; brakes; steering direction (worked out from the steering geometry); and the engine torque curve, gears and final drive. You don't need BeamNG installed for most mods: tires and wheels the mod borrows from the game are rebuilt from their part names.</p>
     <p>What doesn't: the 3D model (the body is drawn flat from the collision triangles), textures, lights, sounds, scripted features (ABS, ESC, electrics) and anti-roll bars. Convert only mods whose license lets you.</p>
   </footer>
 </div>

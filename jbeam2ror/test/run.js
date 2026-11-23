@@ -40,12 +40,15 @@ const check = (cond, msg) => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${msg}`); 
   const m = /^\d+, [-\d.]+, [-\d.]+, [-\d.]+, l, 28 ;b0l$/m.test(truck);
   check(m, 'node masses copied exactly');
 
+  // node numbers by BeamNG name (from the ;name comments)
+  const num = (name) => (truck.match(new RegExp(`^(\\d+), .* ;${name}$`, 'm')) || [])[1];
+
   // Steering signs: left and right hydros must have opposite factors that turn the wheels right on "right"
-  const hy = [...truck.matchAll(/^(\d+), (\d+), (-?[\d.]+), n$/gm)].map((x) => +x[3]);
+  const hy = [...truck.matchAll(/^(\d+), (\d+), (-?[\d.]+), n$/gm)].filter((x) => x[1] === num('fs1l') || x[1] === num('fs1r')).sort((a, b) => (a[1] === num('fs1l') ? -1 : 1)).map((x) => +x[3]);
   check(hy.length === 2 && hy[0] < 0 && hy[1] > 0, `steering factors ${hy.join(', ')}`);
 
   // Wheels: axis order consistent (left wheel node1 inner, right wheel node1 outer)
-  check(/16, 0, 1, 9999/.test(truck) && /16, 3, 2, 9999/.test(truck), 'wheel axes ordered for forward drive');
+  check(new RegExp(`16, ${num('fw1l')}, ${num('fw2l')}, 9999`).test(truck) && new RegExp(`16, ${num('fw2r')}, ${num('fw1r')}, 9999`).test(truck), 'wheel axes ordered for forward drive');
 
   // Zip round-trip
   const zip = J2R.buildModZip(r);

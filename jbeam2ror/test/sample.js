@@ -92,7 +92,8 @@ function suspension(axle, y, springVar) {
     "slotType": "testcar_suspension_${W}",
     "slots": [
         ["type", "default", "description"],
-        ["wheel_${W}", "steelwheel_15_${W}", "Wheels"]
+        ["wheel_${W}", "steelwheel_15_${W}", "Wheels"],
+        ["testcar_wheeldata_${W}", "testcar_wheeldata_${W}", "Spindles"]
     ],
     "nodes": [
         ["id", "posX", "posY", "posZ"],
@@ -125,6 +126,12 @@ function suspension(axle, y, springVar) {
     "pressureWheels": [
         ["name", "hubGroup", "group", "node1:", "node2:", "nodeS", "nodeArm:", "wheelDir"],
         {"enableBrakes": true, "brakeTorque": ${A === 'f' ? 2000 : 1300}, "parkingTorque": ${A === 'f' ? 0 : 1000}},
+    ],
+},
+"testcar_wheeldata_${W}": {
+    "slotType": "testcar_wheeldata_${W}",
+    "pressureWheels": [
+        ["name", "hubGroup", "group", "node1:", "node2:", "nodeS", "nodeArm:", "wheelDir"],
         ["${W}L", "wheel_${W}L", "tire_${W}L", "${A}w1l", "${A}w2l", 9999, "${A}s1l", 1],
         ["${W}R", "wheel_${W}R", "tire_${W}R", "${A}w1r", "${A}w2r", 9999, "${A}s1r", -1],
         {"enableBrakes": false}
