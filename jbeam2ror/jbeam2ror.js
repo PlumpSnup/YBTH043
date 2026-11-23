@@ -1301,21 +1301,25 @@
       return ids.length;
     };
 
+    const stabLinks = () => [...beams.map((b) => ({ a: b.a, b: b.b, k: b.spring, c: b.damp })),
+      ...shocks.map((x) => ({ a: x.a, b: x.b, k: x.spring, c: x.damp })),
+      ...steeringHydros.map((h) => ({ a: h.a, b: h.b, k: h.spring, c: h.damp }))];
     let selfTest = null;
     const sim = () => { const r0 = simulateDrop(nodes, beams, shocks, steeringHydros, wheels, up, slidenodes); if (opts.debug && opts.debug !== "quiet") console.log("[sim]", r0.stable, r0.firstBlow, "touched", touched.size, "mass", [...nodes.values()].reduce((s2, nd) => s2 + nd.weight, 0).toFixed(0)); return r0; };
     const fixOn = opts.massFix !== false;
     if (opts.selfTest === false) {
-      if (fixOn) { applyMass(localMass); applyMass(safeMass); }
+      if (fixOn) { applyMass(localMass); stabilizeModes(nodes, stabLinks(), raise, 400, 1.25); }
     } else {
-      // 1) Exact BeamNG masses.
+      // 1) Make every vibration mode comfortably stable for RoR's integrator, always: a
+      //    marginal mode may survive a short, perfectly still test but grows in the game.
+      if (fixOn) {
+        applyMass(localMass);
+        stabilizeModes(nodes, stabLinks(), raise, 400, 1.25);
+      }
       selfTest = sim();
       // 2) Fix the nodes that are unstable on their own.
       if (!selfTest.stable && fixOn) {
-        applyMass(localMass);
-        const links = [...beams.map((b) => ({ a: b.a, b: b.b, k: b.spring, c: b.damp })),
-          ...shocks.map((x) => ({ a: x.a, b: x.b, k: x.spring, c: x.damp })),
-          ...steeringHydros.map((h) => ({ a: h.a, b: h.b, k: h.spring, c: h.damp }))];
-        stabilizeModes(nodes, links, raise, 400);
+        stabilizeModes(nodes, stabLinks(), raise, 400, 1.5);
         selfTest = sim();
       }
       // 3) Around wherever it still blows up, apply the guaranteed-stable mass, growing the area.
@@ -1589,6 +1593,7 @@
       mass[i] = nd.weight;
     }
     const springs = [];
+    let seed = 12345; const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff - 0.5);
     const addIdx = (i, j, k, c, precomp, deform, shock) => {
       const dx = pos[j * 3] - pos[i * 3], dy = pos[j * 3 + 1] - pos[i * 3 + 1], dz = pos[j * 3 + 2] - pos[i * 3 + 2];
       const L = Math.hypot(dx, dy, dz);
@@ -1649,10 +1654,12 @@
     for (let i = 0; i < n; i++) ground = Math.min(ground, pos[i * 3 + 1]);
     ground -= 0.02;
     const dt = PHYSICS_DT, g = 9.81;
-    const steps = Math.round((extra.seconds || 2.5) / dt);
+    const steps = Math.round((extra.seconds || 4) / dt);
     const probe = [];
     let fastest = null, maxSpeedLate = 0, maxSpeedMid = 0, blew = false, firstBlow = null;
     const energy = new Float64Array(n);
+    // jiggle every node by up to 1 cm/s, like the rounding noise in RoR, so unstable modes show up
+    for (let q = 0; q < n * 3; q++) vel[q] = rnd() * 0.02;
     for (let s = 0; s < steps; s++) {
       if (extra.steer !== undefined && s * dt > 1) {
         // RoR: steering right (cstate > 0) sets L = L0 * (1 - cstate * factor); ramp over 0.5 s
@@ -1813,11 +1820,12 @@
         const gm = extra.rorGround;
         for (let i = 0; i < n; i++) {
           const i3 = i * 3;
-          const penetration = pos[i3 + 1] - ground; // <= 0 means touching
-          if (penetration > 0) continue;
+          const depth = ground - pos[i3 + 1]; // RoR's 'penetration': >= 0 when at/below the surface
+          if (depth < 0) continue;
           const Vn = vel[i3 + 1], Fn = frc[i3 + 1];
           let Fr = -Fn;
-          if (Vn < 0) Fr -= (0.8 * Vn + 0.2 * (-penetration) / dt) * mass[i] / dt;
+          // RoR: penetration_depth = solid_ground_level - penetration = -depth
+          if (Vn < 0) Fr -= (0.8 * Vn - 0.2 * depth / dt) * mass[i] / dt;
           if (Fr <= 0) continue;
           const sfx = frc[i3], sfz = frc[i3 + 2];
           let sx = vel[i3], sz = vel[i3 + 2];
@@ -1889,7 +1897,7 @@
         return { wheel: wr.w.name, treadBottomAboveGround: +(lo - ground).toFixed(3), axleHeight: +(chassisLo - ground).toFixed(3) };
       });
     }
-    return { stable, broken: brokenLog, engine: extra.drive ? eng : undefined, contact, fastest, watched, probe, firstBlow, maxSpeedMid: +maxSpeedMid.toFixed(3), maxSpeedLate: +maxSpeedLate.toFixed(3), maxStrain: +maxStrain.toFixed(3), collapsedBeams: collapsed, hotNodes, seconds: 2.5 };
+    return { stable, broken: brokenLog, engine: extra.drive ? eng : undefined, contact, fastest, watched, probe, firstBlow, maxSpeedMid: +maxSpeedMid.toFixed(3), maxSpeedLate: +maxSpeedLate.toFixed(3), maxStrain: +maxStrain.toFixed(3), collapsedBeams: collapsed, hotNodes, seconds: +(steps * dt).toFixed(1) };
   }
 
   /**
@@ -1899,7 +1907,7 @@
    * of the symmetric form M^-1/2 B M^-1/2 by power iteration, see which nodes move in
    * that mode, and make just those heavier (via `raise`). Repeat until all modes fit.
    */
-  function stabilizeModes(nodes, links, raise, maxRounds) {
+  function stabilizeModes(nodes, links, raise, maxRounds, margin) {
     const ids = [...nodes.keys()];
     const ix = new Map(ids.map((id, i) => [id, i]));
     const n = ids.length;
@@ -1912,7 +1920,7 @@
       const w = l.k * dt * dt + 2 * l.c * dt;
       if (w > 0) L.push({ i, j, d, w });
     }
-    const target = 4 / 1.1; // 10 % margin; the drop test then confirms
+    const target = 4 / (margin || 1.25); // safety margin: RoR runs in single precision and real driving excites every mode
     let v = new Float64Array(n * 3);
     for (let q = 0; q < v.length; q++) v[q] = Math.sin(q * 12.9898) * 0.5 + 0.5;
     let rounds = 0, lambda = 0;
@@ -2015,7 +2023,7 @@
     }));
   }
 
-  const api = { _simulateDrop: simulateDrop, parseJBeam, evalExpression, openZip, makeZip, loadLibrary, listVehicles, convert, buildModZip, filesToEntries, crc32 };
+  const api = { _stabilizeModes: stabilizeModes, _simulateDrop: simulateDrop, parseJBeam, evalExpression, openZip, makeZip, loadLibrary, listVehicles, convert, buildModZip, filesToEntries, crc32 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.J2R = api;
 })(typeof self !== 'undefined' ? self : this);

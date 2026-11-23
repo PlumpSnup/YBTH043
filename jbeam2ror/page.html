@@ -313,7 +313,7 @@ footer p { margin: 0 0 6px; }
     const r = state.result, s = r.report.stats, st = r.report.selfTest;
     const notes = r.report.warnings;
     const badge = !st ? '' : st.stable
-      ? `<div class="badge ok">${ICON_OK}<span><b>Drop test passed.</b> Dropped onto flat ground for ${st.seconds}&nbsp;s at RoR's 2000&nbsp;Hz step, it settled with no beam stretched more than ${(st.maxStrain * 100).toFixed(1)}%.</span></div>`
+      ? `<div class="badge ok">${ICON_OK}<span><b>Drop test passed.</b> Dropped onto flat ground for 4&nbsp;s at RoR's 2000&nbsp;Hz step, it settled with no beam stretched more than ${(st.maxStrain * 100).toFixed(1)}%.</span></div>`
       : `<div class="badge bad">${ICON_BAD}<span><b>Drop test failed.</b> The vehicle stayed unstable after automatic fixes, so it may shake or come apart in RoR. The notes below say what was tried.</span></div>`;
     $('report').innerHTML = `
       ${state.isExample ? '<p class="example-note">Example: this is the built-in test car. Choose your own mod on the left to convert it.</p>' : ''}
