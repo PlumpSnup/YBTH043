@@ -20,6 +20,7 @@ function validate(text) {
     if (!sawTitle) { sawTitle = true; return; }
     if (ended) { errors.push(`line ${ln + 1}: content after 'end'`); return; }
     const kw = line.split(/[\s,]+/)[0];
+    if (/^tractioncontrol$/i.test(kw)) { if (!/^TractionControl\s+[\d.]+\s*,\s*[\d.]+/i.test(line)) errors.push(`line ${ln + 1}: bad TractionControl line`); return; }
     if (/^[a-z]/i.test(line) && keywords.has(kw)) {
       if (kw === 'set_beam_defaults') {
         const a = line.split(/[\s,]+/).filter(Boolean);

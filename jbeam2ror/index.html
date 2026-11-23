@@ -327,6 +327,9 @@ footer p { margin: 0 0 6px; }
       ${state.isExample ? '<p class="example-note">Example: this is the built-in test car. Choose your own mod on the left to convert it.</p>' : ''}
       <div class="report-head"><h2>${esc(s.vehicle)}</h2><span class="tag">${esc(s.config)}</span></div>
       ${badge}
+      ${r.report.driveTest ? (r.report.driveTest.ok
+        ? `<div class="badge ok">${ICON_OK}<span><b>Drive test passed.</b> Full throttle from a standstill in first gear, using RoR's engine and clutch maths: it covered ${r.report.driveTest.metres}&nbsp;m in ${r.report.driveTest.seconds}&nbsp;s with stable wheels.</span></div>`
+        : `<div class="badge bad">${ICON_BAD}<span><b>Drive test failed.</b> ${r.report.driveTest.exploded ? 'The driven wheels became unstable under full throttle.' : 'The car barely moved under full throttle.'}</span></div>`) : ''}
       <dl class="specs">
         <div><dt>Mass</dt><dd>${s.massKg.toLocaleString()} <small>kg</small></dd></div>
         <div><dt>Nodes</dt><dd>${s.nodes.toLocaleString()}</dd></div>

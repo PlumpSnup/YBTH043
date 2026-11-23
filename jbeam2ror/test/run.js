@@ -30,7 +30,7 @@ const check = (cond, msg) => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${msg}`); 
   check(/^minimass\n0\.01, l$/m.test(truck), 'minimass override present (no 50 kg default)');
   check(/^enable_advanced_deformation$/m.test(truck), 'advanced deformation enabled');
   check(r.report.stats.config === 'sport', 'picked the .pc configuration');
-  check(/tire_F_195/.test(JSON.stringify(lib.configs[0].data)) && /0\.315, 0\.195, 16/.test(truck), 'tire chosen by the .pc applied to the front wheels');
+  check(/tire_F_195/.test(JSON.stringify(lib.configs[0].data)) && /0\.315, 0\.195, 12/.test(truck), 'tire chosen by the .pc applied to the front wheels');
   check(/52000, 3500, 0\.3, 0\.3, 1\.08/.test(truck), '.pc variable override reached the front springs');
   check(r.report.stats.drivenWheels === 2, 'rear wheels driven via powertrain connectedWheel');
   check(/^engine\n\d+, \d+, 300, 3\.9, 3\.4, 1, 3\.6, 2\.2, 1\.5, 1\.15, 0\.9, 0\.75, -1$/m.test(truck), 'engine/gearbox/final drive converted');
@@ -48,7 +48,7 @@ const check = (cond, msg) => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${msg}`); 
   check(hy.length === 2 && hy[0] < 0 && hy[1] > 0, `steering factors ${hy.join(', ')}`);
 
   // Wheels: axis order consistent (left wheel node1 inner, right wheel node1 outer)
-  check(new RegExp(`16, ${num('fw1l')}, ${num('fw2l')}, 9999`).test(truck) && new RegExp(`16, ${num('fw2r')}, ${num('fw1r')}, 9999`).test(truck), 'wheel axes ordered for forward drive');
+  check(new RegExp(`12, ${num('fw1l')}, ${num('fw2l')}, 9999`).test(truck) && new RegExp(`12, ${num('fw2r')}, ${num('fw1r')}, 9999`).test(truck), 'wheel axes ordered for forward drive');
 
   // Defaults that keep BeamNG cars from floating / hidden under their skeleton in RoR
   const cabLines = truck.slice(truck.indexOf('\ncab\n')).split('\n').slice(2).filter((l) => /^\d/.test(l));

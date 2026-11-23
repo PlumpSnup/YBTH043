@@ -1296,21 +1296,15 @@ footer p { margin: 0 0 6px; }
       const snode = hasNode(w.cols.nodeS) ? String(w.cols.nodeS) : '9999';
       const hasTire = p.hasTire !== false;
       const radius = num(hasTire ? p.radius : (p.hubRadius || p.radius), NaN) || num(p.hubRadius, 0.3) || 0.3;
-      const rays = Math.round(Math.min(40, Math.max(6, num(p.numRays, 16))));
+      // 12 rays: same wheel mass in fewer, heavier tread nodes = far more stable in RoR
+      const rays = Math.round(Math.min(12, Math.max(8, num(p.numRays, 12))));
       const tireW = num(p.nodeWeight, 0.35), hubW = num(p.hubNodeWeight, 0.6);
-      let mass = 2 * rays * (tireW + hubW);
+      const bngRays = Math.round(Math.min(64, Math.max(6, num(p.numRays, 16))));
+      let mass = 2 * bngRays * (tireW + hubW); // BeamNG's wheel mass (hub + tyre nodes)
       mass = Math.min(200, Math.max(4, mass));
       const nodeMass = mass / (2 * rays);
       const psi = num(p.pressurePSI, 30);
-      // RoR builds each wheel as two rings of 'rays' light nodes; every tread node has
-      // 6 tyre/rim beams with this spring and damping, plus 4 tread neighbours of the
-      // same mass. Stability of RoR's integrator needs, per mode,
-      // (k dt^2 + 2 c dt) * G / m < 4 with G <= 11 for that layout (Gershgorin bound),
-      // and RoR stiffens the spokes on its own when a tread node stretches outward,
-      // so we keep a margin. Spring takes under half the budget, damping the rest.
-      const G = 11, budget = (4 / 1.35) * nodeMass / G;
-      let spring = Math.min(1.2e6, Math.max(1e5, 13000 * psi), 0.45 * budget / (PHYSICS_DT * PHYSICS_DT));
-      let damp = Math.min(0.3 * 2 * Math.sqrt(spring * nodeMass), 0.85 * (budget - spring * PHYSICS_DT * PHYSICS_DT) / (2 * PHYSICS_DT));
+      const { spring, damp } = rorTyre(nodeMass, radius, Math.min(1.2e6, Math.max(1.5e5, 13000 * psi)));
       const brakeTorque = num(p.brakeTorque, 0);
       const parkTorque = num(p.parkingTorque, 0);
       const braked = p.enableBrakes === false ? 0 : (brakeTorque > 0 || p.brakeTorque === undefined) ? (parkTorque > 0 ? 1 : 4) : 0;
@@ -1392,7 +1386,20 @@ footer p { margin: 0 0 6px; }
       const isElectric = /electric/i.test(engineDev.type);
       const shiftUp = Math.max(idle + 1500, maxRPM * 0.9);
       const shiftDown = Math.max(idle + 300, shiftUp * 0.45);
+      // RoR's clutch is a spring between engine and wheel speed: torque = clutchForce * (rpm
+      // difference). On slipping light car wheels RoR's defaults (5000-10000) overshoot every
+      // physics step, so the torque slams between +max and -max and the wheels shake apart.
+      // Stable when clutchForce * dt * 9.55 / I_wheels < ~1, with I_wheels = sum m r^2 of the
+      // driven wheels; we use half that. RoR's engine inertia is in rpm units
+      // (rpm += dt * torque / inertia), i.e. BeamNG's kg m^2 divided by 9.55, kept large
+      // enough that the engine side of the clutch loop is stable in top gear too.
+      const drivenW = wheels.filter((w) => w.propulsed);
+      const Iw = drivenW.reduce((s2, w) => s2 + w.mass * w.radius * w.radius, 0) || 2;
+      const clutchForce = Math.round(Math.max(80, Math.min(5000, 0.5 * Iw / (PHYSICS_DT * 9.5493))));
+      const Gtop = Math.min(...fwdGears) * finalDrive;
+      const inertia = Math.max(num(ed.inertia, 0.15) / 9.5493, 0.6 * clutchForce * PHYSICS_DT / (Gtop * Gtop * 0.5), 0.02);
       engine = {
+        clutchForce, inertia: +inertia.toFixed(4),
         shiftDown, shiftUp, torque: maxT, finalDrive, reverse, gears: fwdGears, idle,
         type: isElectric ? 'e' : (maxT > 900 ? 't' : 'c'),
         curve: curve.filter((c) => c[0] >= 0).map((c) => [c[0], Math.max(0, c[1] / maxT)]),
@@ -1521,6 +1528,21 @@ footer p { margin: 0 0 6px; }
         (addedMass > 0.05 ? ` and adding ${addedMass.toFixed(1)} kg (${(100 * addedMass / originalMass).toFixed(1)}% of the body)` : ', so the total weight is unchanged'));
     }
 
+    // -- drive test: full throttle from standstill in 1st gear with RoR's engine/clutch maths --
+    let driveTest = null;
+    if (engine && selfTest && selfTest.stable && opts.selfTest !== false && wheels.some((w) => w.propulsed)) {
+      const G = engine.gears[0] * engine.finalDrive;
+      const ref = [...nodes.keys()][0];
+      const st = simulateDrop(nodes, beams, shocks, steering, wheels, up, slidenodes, {
+        seconds: 3.5, probe: [ref, ref],
+        drive: { ratio: G, torque: engine.torque, clutchForce: engine.clutchForce, inertia: engine.inertia, idle: engine.idle, maxRPM: engine.shiftUp },
+      });
+      const p0 = st.probe[Math.floor(st.probe.length * 0.25)] || st.probe[0], p1 = st.probe[st.probe.length - 1];
+      const dist = p0 && p1 ? Math.hypot(p1[3] - p0[3], p1[4] - p0[4]) : 0;
+      driveTest = { ok: !st.firstBlow && dist > 2, metres: +dist.toFixed(1), seconds: +((p1[0] - p0[0]) || 0).toFixed(1), exploded: !!st.firstBlow };
+      if (!driveTest.ok) warn(driveTest.exploded ? 'Drive test: the driven wheels became unstable under full throttle. Expect shaking when accelerating hard.' : 'Drive test: the car barely moved under full throttle in first gear.');
+    }
+
     // -- write the .truck ----------------------------------------------------
     const idx = new Map();
     let k = 0;
@@ -1631,8 +1653,12 @@ footer p { margin: 0 0 6px; }
       L.push('engine');
       L.push(`${fmt(engine.shiftDown)}, ${fmt(engine.shiftUp)}, ${fmt(engine.torque)}, ${fmt(engine.finalDrive, 3)}, ${fmt(engine.reverse, 3)}, 1, ${engine.gears.map((g) => fmt(g, 3)).join(', ')}, -1`);
       L.push('');
+      L.push('; Traction control: stops wheelspin from shaking the light tyre nodes apart (toggle in RoR)');
+      L.push('TractionControl 2, 0.25, 1, 20, mode: ON');
+      L.push('');
       L.push('engoption');
-      L.push(`${engine.type === 't' ? 10 : 2}, ${engine.type}`);
+      L.push('; inertia, type, clutch force (both tuned so the engine/clutch/wheel loop is stable at RoR\'s 2000 Hz step)');
+      L.push(`${fmt(engine.inertia, 4)}, ${engine.type}, ${engine.clutchForce}`);
       L.push('');
       if (engine.curve.length >= 2) {
         L.push('torquecurve');
@@ -1709,6 +1735,7 @@ footer p { margin: 0 0 6px; }
       drivenWheels: wheels.filter((w) => w.propulsed).length,
       triangles: cabTris.length,
       massKg: Math.round(totalMass),
+      driveTest: driveTest ? (driveTest.ok ? `passed (${driveTest.metres} m in ${driveTest.seconds} s from standstill, 1st gear)` : 'FAILED') : 'skipped',
       selfTest: selfTest ? (selfTest.stable ? `passed (settled, max beam strain ${(selfTest.maxStrain*100).toFixed(1)}%)` : 'FAILED') : 'skipped',
       engine: engine ? `${Math.round(engine.torque)} Nm, ${engine.gears.length} gears, final drive ${engine.finalDrive.toFixed(2)}` : 'none',
     };
@@ -1721,7 +1748,7 @@ footer p { margin: 0 0 6px; }
         { path: fileName, data: truck },
         { path: `${fileBase}.material`, data: material },
       ],
-      report: { warnings, stats, selfTest, loadErrors: lib.errors.slice(0, 50) },
+      report: { warnings, stats, selfTest, driveTest, loadErrors: lib.errors.slice(0, 50) },
     };
   }
 
@@ -1757,6 +1784,8 @@ footer p { margin: 0 0 6px; }
       springs.push({ i, j, k, c, L0: L * precomp, Lr: L, deform, shock: shock || null });
     };
     let next = nChassis;
+    const wheelRings = [];
+    const eng = { log: [] };
     const spoke = { sb: 0.66, lb: 0, hardK: 9000000, hardD: 12000 }; // RoR DEFAULT_SPRING / DEFAULT_DAMP
     for (const w of wheels) {
       const a = ix.get(w.n1), b = ix.get(w.n2);
@@ -1766,6 +1795,7 @@ footer p { margin: 0 0 6px; }
       const ang = -Math.PI / w.rays, ca = Math.cos(ang), sa = Math.sin(ang);
       const rot = (v) => v3.add(v3.add(v3.scale(v, ca), v3.scale(v3.cross(axis, v), sa)), v3.scale(axis, v3.dot(axis, v) * (1 - ca)));
       const base = next;
+      wheelRings.push({ w, a, b, base, count: 2 * w.rays, arm: ix.get(w.arm) });
       for (let r = 0; r < w.rays; r++) {
         for (const [hub, hp] of [[a, pa], [b, pb]]) {
           const q = v3.add(hp, ray);
@@ -1818,7 +1848,7 @@ footer p { margin: 0 0 6px; }
       }
       if (extra.probe && s % 200 === 0) {
         const [pa, pb] = extra.probe.map((id) => ix.get(id));
-        probe.push([+(s * dt).toFixed(2), Math.atan2(pos[pb * 3 + 2] - pos[pa * 3 + 2], pos[pb * 3] - pos[pa * 3]) * 180 / Math.PI, pos[pa * 3 + 1], pos[pa * 3], Math.hypot(pos[pb * 3] - pos[pa * 3], pos[pb * 3 + 1] - pos[pa * 3 + 1], pos[pb * 3 + 2] - pos[pa * 3 + 2])]);
+        probe.push([+(s * dt).toFixed(2), Math.atan2(pos[pb * 3 + 2] - pos[pa * 3 + 2], pos[pb * 3] - pos[pa * 3]) * 180 / Math.PI, pos[pa * 3 + 1], pos[pa * 3], pos[pa * 3 + 2], Math.hypot(pos[pb * 3] - pos[pa * 3], pos[pb * 3 + 1] - pos[pa * 3 + 1], pos[pb * 3 + 2] - pos[pa * 3 + 2])]);
       }
       frc.fill(0);
       for (let i = 0; i < n; i++) {
@@ -1828,6 +1858,70 @@ footer p { margin: 0 0 6px; }
           const kg = 0.2 * mass[i] / (dt * dt), cg = 0.2 * mass[i] / dt;
           frc[i * 3 + 1] += kg * pen - cg * Math.min(0, vel[i * 3 + 1]);
           frc[i * 3] -= cg * 0.5 * vel[i * 3]; frc[i * 3 + 2] -= cg * 0.5 * vel[i * 3 + 2];
+        }
+      }
+      // RoR engine + clutch (Engine::UpdateEngine / CalcDifferentials), full throttle in one gear
+      let engT = 0;
+      if (extra.drive && s * dt > 1) {
+        const dv = extra.drive;
+        if (eng.rpm === undefined) eng.rpm = dv.idle;
+        // wheel spin as RoR measures it: mean tread speed / radius of the driven wheels
+        let spin = 0, nw = 0;
+        for (const wr of wheelRings) {
+          if (!wr.w.propulsed) continue;
+          const a3 = wr.a * 3, b3 = wr.b * 3;
+          const ax = v3.norm([pos[b3] - pos[a3], pos[b3 + 1] - pos[a3 + 1], pos[b3 + 2] - pos[a3 + 2]]);
+          let sp = 0;
+          for (let q = 0; q < wr.count; q++) {
+            const o = wr.base + q, inner = (q % 2) ? wr.b : wr.a;
+            const r = [pos[o * 3] - pos[inner * 3], pos[o * 3 + 1] - pos[inner * 3 + 1], pos[o * 3 + 2] - pos[inner * 3 + 2]];
+            const d = v3.scale(v3.cross(ax, r), 1 / (v3.len(r) || 1));
+            sp += (vel[o * 3] - vel[inner * 3]) * d[0] + (vel[o * 3 + 1] - vel[inner * 3 + 1]) * d[1] + (vel[o * 3 + 2] - vel[inner * 3 + 2]) * d[2];
+          }
+          spin += sp / wr.count / wr.w.radius; nw++;
+        }
+        const wheelRpm = (spin / Math.max(1, nw)) * 60 / (2 * Math.PI);
+        const G = dv.ratio;
+        const thr = 1.5 * dv.torque * G;
+        let clutchT = (eng.rpm / G - wheelRpm) * dv.clutchForce;
+        clutchT = Math.max(-thr, Math.min(thr, clutchT));
+        const curveT = eng.rpm < dv.maxRPM * 1.25 ? dv.torque : 0;
+        eng.rpm += dt * (curveT - clutchT / G) / dv.inertia;
+        eng.rpm = Math.max(dv.idle * 0.5, eng.rpm);
+        engT = clutchT / Math.max(1, nw);
+        eng.maxAbsT = Math.max(eng.maxAbsT || 0, Math.abs(engT));
+        if (s % 400 === 0) eng.log.push([+(s * dt).toFixed(1), Math.round(eng.rpm), Math.round(wheelRpm), Math.round(engT)]);
+      }
+      // drive torque on driven wheels, as RoR's CalcWheels (plus the reaction on the arm node)
+      if ((extra.torque || extra.drive) && s * dt > 1) {
+        const T = extra.drive ? engT : extra.torque * Math.min(1, (s * dt - 1) / 0.3);
+        for (const wr of wheelRings) {
+          if (!wr.w.propulsed) continue;
+          const a3 = wr.a * 3, b3 = wr.b * 3;
+          let ax = [pos[b3] - pos[a3], pos[b3 + 1] - pos[a3 + 1], pos[b3 + 2] - pos[a3 + 2]];
+          ax = v3.norm(ax);
+          const per = T / wr.count;
+          for (let q = 0; q < wr.count; q++) {
+            const o = wr.base + q, inner = (q % 2) ? wr.b : wr.a;
+            const r = [pos[o * 3] - pos[inner * 3], pos[o * 3 + 1] - pos[inner * 3 + 1], pos[o * 3 + 2] - pos[inner * 3 + 2]];
+            const il = 1 / (v3.len(r) || 1);
+            const d = v3.scale(v3.cross(ax, r), il);
+            frc[o * 3] += d[0] * per * il; frc[o * 3 + 1] += d[1] * per * il; frc[o * 3 + 2] += d[2] * per * il;
+          }
+          if (wr.arm !== undefined) {
+            const da = v3.len(v3.sub([pos[wr.arm * 3], pos[wr.arm * 3 + 1], pos[wr.arm * 3 + 2]], [pos[a3], pos[a3 + 1], pos[a3 + 2]]));
+            const db = v3.len(v3.sub([pos[wr.arm * 3], pos[wr.arm * 3 + 1], pos[wr.arm * 3 + 2]], [pos[b3], pos[b3 + 1], pos[b3 + 2]]));
+            const near = da < db ? wr.a : wr.b, n3 = near * 3, m3 = wr.arm * 3;
+            const rr = [pos[m3] - pos[n3], pos[m3 + 1] - pos[n3 + 1], pos[m3 + 2] - pos[n3 + 2]];
+            const radius = v3.sub(rr, v3.scale(ax, v3.dot(rr, ax)));
+            const offset = v3.len(v3.sub(rr, radius));
+            const rlen = v3.len(radius);
+            if (rlen > 0.01 && offset * 2 < rlen) {
+              const cf = v3.scale(v3.cross(ax, v3.scale(radius, 1 / rlen)), (0.5 * T / rlen) * (1 - (offset * 2) / rlen));
+              frc[m3] -= cf[0]; frc[m3 + 1] -= cf[1]; frc[m3 + 2] -= cf[2];
+              frc[n3] += cf[0]; frc[n3 + 1] += cf[1]; frc[n3 + 2] += cf[2];
+            }
+          }
         }
       }
       // slidenodes: pull the node back onto the nearest point of its rail (sideways only)
@@ -1919,7 +2013,17 @@ footer p { margin: 0 0 6px; }
     const hotNodes = stable ? [] : order.filter((i) => i < nChassis).slice(0, Math.max(1, Math.ceil(nChassis * 0.03))).map((i) => ids[i]);
     let minY = Infinity;
     for (let i = 0; i < n; i++) minY = Math.min(minY, pos[i * 3 + 1]);
-    return { stable, fastest, watched, probe, firstBlow, maxSpeedMid: +maxSpeedMid.toFixed(3), maxSpeedLate: +maxSpeedLate.toFixed(3), maxStrain: +maxStrain.toFixed(3), collapsedBeams: collapsed, hotNodes, seconds: 2.5 };
+    let contact = null;
+    if (extra.probe) {
+      contact = wheelRings.map((wr) => {
+        let lo = Infinity;
+        for (let q = 0; q < wr.count; q++) lo = Math.min(lo, pos[(wr.base + q) * 3 + 1]);
+        let chassisLo = Infinity;
+        for (const id of [wr.w.n1, wr.w.n2]) chassisLo = Math.min(chassisLo, pos[ix.get(id) * 3 + 1]);
+        return { wheel: wr.w.name, treadBottomAboveGround: +(lo - ground).toFixed(3), axleHeight: +(chassisLo - ground).toFixed(3) };
+      });
+    }
+    return { stable, engine: extra.drive ? eng : undefined, contact, fastest, watched, probe, firstBlow, maxSpeedMid: +maxSpeedMid.toFixed(3), maxSpeedLate: +maxSpeedLate.toFixed(3), maxStrain: +maxStrain.toFixed(3), collapsedBeams: collapsed, hotNodes, seconds: 2.5 };
   }
 
   /**
@@ -1978,6 +2082,37 @@ footer p { margin: 0 0 6px; }
       }
     }
     return { rounds, lambda };
+  }
+
+  /**
+   * Tyre spring/damping for a RoR "wheels" wheel that stays stable while spinning.
+   * Each tread node (mass m) has 6 tyre/rim beams and 4 tread neighbours: stability of
+   * RoR's integrator needs 11 * (k dt^2 + 2 c dt) / m < 4 (Gershgorin bound). RoR also
+   * stiffens the two spokes of a node as it is flung outward by x metres:
+   * k += 9e6 x, c += 12000 x (DEFAULT_SPRING / DEFAULT_DAMP, hard-coded in RoR). At tread
+   * speed v, x ~= m v^2 / (r * 2k). We pick the k nearest the real tyre's stiffness that
+   * keeps every mode stable up to vMax, with as much damping as remains.
+   */
+  function rorTyre(m, r, kWanted, vMax) {
+    vMax = vMax || 60;
+    const dt = PHYSICS_DT, budget = (4 / 1.15) * m / 11;
+    const cost = (k, c, v) => {
+      const x = m * v * v / r / (2 * k);
+      return (k + 9e6 * x) * dt * dt + 2 * (c + 12000 * x) * dt;
+    };
+    let best = null;
+    for (let k = 1e5; k <= 2e6; k *= 1.05) {
+      // most damping that still fits at vMax (and at rest), capped at 30 % of critical
+      const cFit = Math.min((budget - cost(k, 0, vMax)) / (2 * dt), (budget - cost(k, 0, 0)) / (2 * dt));
+      const c = Math.min(0.3 * 2 * Math.sqrt(k * m), cFit);
+      if (c < 15) continue;
+      const score = Math.abs(Math.log(k / kWanted));
+      if (!best || score < best.score) best = { score, spring: k, damp: c };
+    }
+    if (best) return { spring: Math.round(best.spring), damp: +best.damp.toFixed(1) };
+    // Very light wheels: fall back to what is stable at rest
+    const k = Math.min(kWanted, 0.4 * budget / (dt * dt));
+    return { spring: Math.round(k), damp: +Math.max(5, (budget - k * dt * dt) / (2 * dt) * 0.6).toFixed(1) };
   }
 
   /** Largest eigenvalue of a symmetric 3x3 matrix given as [xx, yy, zz, xy, xz, yz]. */
@@ -2370,6 +2505,9 @@ else root.J2R_SAMPLE = { buildSample };
       ${state.isExample ? '<p class="example-note">Example: this is the built-in test car. Choose your own mod on the left to convert it.</p>' : ''}
       <div class="report-head"><h2>${esc(s.vehicle)}</h2><span class="tag">${esc(s.config)}</span></div>
       ${badge}
+      ${r.report.driveTest ? (r.report.driveTest.ok
+        ? `<div class="badge ok">${ICON_OK}<span><b>Drive test passed.</b> Full throttle from a standstill in first gear, using RoR's engine and clutch maths: it covered ${r.report.driveTest.metres}&nbsp;m in ${r.report.driveTest.seconds}&nbsp;s with stable wheels.</span></div>`
+        : `<div class="badge bad">${ICON_BAD}<span><b>Drive test failed.</b> ${r.report.driveTest.exploded ? 'The driven wheels became unstable under full throttle.' : 'The car barely moved under full throttle.'}</span></div>`) : ''}
       <dl class="specs">
         <div><dt>Mass</dt><dd>${s.massKg.toLocaleString()} <small>kg</small></dd></div>
         <div><dt>Nodes</dt><dd>${s.nodes.toLocaleString()}</dd></div>

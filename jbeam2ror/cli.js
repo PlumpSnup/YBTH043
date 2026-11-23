@@ -77,6 +77,7 @@ async function openSource(p) {
   console.log(`  ${s.wheels} wheels (${s.drivenWheels} driven), ${s.triangles} body triangles, ~${s.massKg} kg`);
   console.log(`  engine: ${s.engine}`);
   console.log(`  physics self-test: ${s.selfTest}`);
+  console.log(`  drive test: ${s.driveTest}`);
   if (result.report.warnings.length) {
     console.log('\nNotes:');
     for (const w of result.report.warnings) console.log(`  - ${w}`);
