@@ -1637,7 +1637,8 @@
       if (L < 1e-6) return;
       springs.push({ i, j, k, c, L0: L * precomp, Lr: L, deform, shock: shock || null });
     };
-    for (const b of beams) { addSpring(b.a, b.b, b.spring, b.damp, 1, b.deform); if (b.support && springs.length) springs[springs.length - 1].support = true; }
+    const brokenLog = [];
+    for (const b of beams) { const n0 = springs.length; addSpring(b.a, b.b, b.spring, b.damp, 1, b.deform); if (springs.length > n0) { const sp = springs[springs.length - 1]; sp.support = !!b.support; sp.strength = b.strength; sp.name = b.a + '-' + b.b; } }
     for (const s of shocks) addSpring(s.a, s.b, s.spring, s.damp, s.precomp, Infinity, s);
     const hydroStart = springs.length;
     for (const h of hydros) addSpring(h.a, h.b, h.spring, h.damp, 1, h.deform);
@@ -1666,7 +1667,7 @@
       for (let i = 0; i < n; i++) {
         frc[i * 3 + 1] -= mass[i] * g;
         const pen = ground - pos[i * 3 + 1];
-        if (pen > 0) {
+        if (pen > 0 && !extra.rorGround) {
           const kg = 0.2 * mass[i] / (dt * dt), cg = 0.2 * mass[i] / dt;
           frc[i * 3 + 1] += kg * pen - cg * Math.min(0, vel[i * 3 + 1]);
           frc[i * 3] -= cg * 0.5 * vel[i * 3]; frc[i * 3 + 2] -= cg * 0.5 * vel[i * 3 + 2];
@@ -1690,25 +1691,48 @@
             const d = v3.scale(v3.cross(ax, r), 1 / (v3.len(r) || 1));
             sp += (vel[o * 3] - vel[inner * 3]) * d[0] + (vel[o * 3 + 1] - vel[inner * 3 + 1]) * d[1] + (vel[o * 3 + 2] - vel[inner * 3 + 2]) * d[2];
           }
+          wr.speed = sp / wr.count;
           spin += sp / wr.count / wr.w.radius; nw++;
         }
         const wheelRpm = (spin / Math.max(1, nw)) * 60 / (2 * Math.PI);
-        const G = dv.ratio;
+        if (dv.ratios) {
+          // simple automatic: shift up at the shift-up rpm (0.3 s with the clutch open, like RoR)
+          if (eng.gear === undefined) { eng.gear = 0; eng.shiftUntil = 0; }
+          if (eng.rpm > dv.maxRPM && eng.gear < dv.ratios.length - 1 && s * dt > eng.shiftUntil) { eng.gear++; eng.shiftUntil = s * dt + 0.3; eng.shifts = (eng.shifts || 0) + 1; }
+        }
+        const G = dv.ratios ? dv.ratios[eng.gear] : dv.ratio;
+        const clutchOpen = dv.ratios && s * dt < eng.shiftUntil;
         const thr = 1.5 * dv.torque * G;
-        let clutchT = (eng.rpm / G - wheelRpm) * dv.clutchForce;
+        let clutchT = clutchOpen ? 0 : (eng.rpm / G - wheelRpm) * dv.clutchForce;
         clutchT = Math.max(-thr, Math.min(thr, clutchT));
         const curveT = eng.rpm < dv.maxRPM * 1.25 ? dv.torque : 0;
         eng.rpm += dt * (curveT - clutchT / G) / dv.inertia;
         eng.rpm = Math.max(dv.idle * 0.5, eng.rpm);
         engT = clutchT / Math.max(1, nw);
         eng.maxAbsT = Math.max(eng.maxAbsT || 0, Math.abs(engT));
-        if (s % 400 === 0) eng.log.push([+(s * dt).toFixed(1), Math.round(eng.rpm), Math.round(wheelRpm), Math.round(engT)]);
+        if (s % 400 === 0) eng.log.push([+(s * dt).toFixed(1), eng.gear === undefined ? 1 : eng.gear + 1, Math.round(eng.rpm), Math.round(wheelRpm), Math.round(engT)]);
       }
       // drive torque on driven wheels, as RoR's CalcWheels (plus the reaction on the arm node)
       if ((extra.torque || extra.drive) && s * dt > 1) {
-        const T = extra.drive ? engT : extra.torque * Math.min(1, (s * dt - 1) / 0.3);
+        const T0 = extra.drive ? engT : extra.torque * Math.min(1, (s * dt - 1) / 0.3);
+        // RoR traction control (ActorForcesEuler: pulse timer, slip > 0.25, coef = (v/w)^ratio)
+        if (extra.tc) {
+          eng.tcTimer = (eng.tcTimer || 0) + dt;
+          if (eng.tcTimer >= 1 / extra.tc.pulse) { eng.tcTimer = 0; eng.tcPulse = !eng.tcPulse; }
+        }
+        const fwdV = extra.tc ? (vel[0] * extra.tc.fwd[0] + vel[1] * extra.tc.fwd[1] + vel[2] * extra.tc.fwd[2]) : 0;
         for (const wr of wheelRings) {
           if (!wr.w.propulsed) continue;
+          let T = T0;
+          if (extra.tc && wr.speed !== undefined) {
+            const cur = Math.abs(fwdV), ws = wr.speed;
+            const slip = Math.abs(ws - fwdV) / Math.max(1, cur);
+            if (Math.abs(T) > 0 && Math.abs(ws) > cur && slip > 0.25) {
+              if (eng.tcPulse) wr.tcCoef = Math.pow(cur / Math.abs(ws), extra.tc.ratio);
+              T *= Math.pow(wr.tcCoef === undefined ? 1 : wr.tcCoef, Math.min(Math.abs(ws) / 5, 1));
+              eng.tcCuts = (eng.tcCuts || 0) + 1;
+            } else wr.tcCoef = 1;
+          }
           const a3 = wr.a * 3, b3 = wr.b * 3;
           let ax = [pos[b3] - pos[a3], pos[b3 + 1] - pos[a3 + 1], pos[b3 + 2] - pos[a3 + 2]];
           ax = v3.norm(ax);
@@ -1779,8 +1803,38 @@
           sp.L0 = L - lim / sp.k;
           f = lim + c * vr;
         }
+        if (extra.breaking && sp.strength !== undefined && Math.abs(f) > sp.strength) { sp.k = 0; sp.c = 0; sp.strength = undefined; sp.broken = true; brokenLog.push([+(s * dt).toFixed(3), sp.name, Math.round(Math.abs(f))]); f = 0; }
+        if (sp.broken) continue;
         frc[i3] += f * ux; frc[i3 + 1] += f * uy; frc[i3 + 2] += f * uz;
         frc[j3] -= f * ux; frc[j3 + 1] -= f * uy; frc[j3 + 2] -= f * uz;
+      }
+      if (extra.rorGround) {
+        // RoR's ground contact (Collisions.cpp primitiveCollision), asphalt ground model
+        const gm = extra.rorGround;
+        for (let i = 0; i < n; i++) {
+          const i3 = i * 3;
+          const penetration = pos[i3 + 1] - ground; // <= 0 means touching
+          if (penetration > 0) continue;
+          const Vn = vel[i3 + 1], Fn = frc[i3 + 1];
+          let Fr = -Fn;
+          if (Vn < 0) Fr -= (0.8 * Vn + 0.2 * (-penetration) / dt) * mass[i] / dt;
+          if (Fr <= 0) continue;
+          const sfx = frc[i3], sfz = frc[i3 + 2];
+          let sx = vel[i3], sz = vel[i3 + 2];
+          const slipv = Math.hypot(sx, sz);
+          if (slipv > 0) { sx /= slipv; sz /= slipv; }
+          const G = Fr * gm.strength * gm.friction, msG = gm.ms * G;
+          let fx, fz;
+          if (slipv < gm.va && G > 0 && sfx * sfx + sfz * sfz <= msG * msG) {
+            const ff = -msG * (1 - Math.exp(-slipv / gm.va));
+            fx = ff * sx - sfx; fz = ff * sz - sfz;
+          } else {
+            const gg = gm.mc + (gm.ms - gm.mc) * Math.exp(-Math.pow(slipv / gm.vs, gm.alpha));
+            const ff = -(gg + Math.min(gm.t2 * slipv, 5)) * G;
+            fx = ff * sx; fz = ff * sz;
+          }
+          frc[i3 + 1] += Fr; frc[i3] += fx; frc[i3 + 2] += fz;
+        }
       }
       for (let i = 0; i < n; i++) {
         const i3 = i * 3, im = dt / mass[i];
@@ -1835,7 +1889,7 @@
         return { wheel: wr.w.name, treadBottomAboveGround: +(lo - ground).toFixed(3), axleHeight: +(chassisLo - ground).toFixed(3) };
       });
     }
-    return { stable, engine: extra.drive ? eng : undefined, contact, fastest, watched, probe, firstBlow, maxSpeedMid: +maxSpeedMid.toFixed(3), maxSpeedLate: +maxSpeedLate.toFixed(3), maxStrain: +maxStrain.toFixed(3), collapsedBeams: collapsed, hotNodes, seconds: 2.5 };
+    return { stable, broken: brokenLog, engine: extra.drive ? eng : undefined, contact, fastest, watched, probe, firstBlow, maxSpeedMid: +maxSpeedMid.toFixed(3), maxSpeedLate: +maxSpeedLate.toFixed(3), maxStrain: +maxStrain.toFixed(3), collapsedBeams: collapsed, hotNodes, seconds: 2.5 };
   }
 
   /**
