@@ -138,7 +138,7 @@ footer p { margin: 0 0 6px; }
               <label class="btn" for="modDir">Choose folder<input type="file" id="modDir" webkitdirectory multiple></label>
             </div>
             <span class="picked" id="modName"></span>
-            <div class="row" id="physRow" hidden><button type="button" id="physBtn">Save physics files only</button><span class="status" id="physStatus"></span></div>
+            <div class="row" id="physRow" hidden><button type="button" id="physBtn">Save physics files only</button><button type="button" id="listBtn">Save file list</button><span class="status" id="physStatus"></span></div>
           </div>
         </div>
       </div>
@@ -370,6 +370,14 @@ footer p { margin: 0 0 6px; }
     } catch (err) { msg.textContent = `Couldn't collect the files: ${err.message}`; }
   });
 
+  // A text list of every file in the mod with its size (no contents)
+  $('listBtn').addEventListener('click', async () => {
+    const msg = $('physStatus');
+    const lines = state.mod.entries.map((e) => `${String(e.size ?? '').padStart(10)}  ${e.path}`).sort((a, b) => a.slice(12).localeCompare(b.slice(12)));
+    const base = String(state.mod.name || 'mod').replace(/\.zip$/i, '').replace(/[^A-Za-z0-9_\-]+/g, '_');
+    await saveFile(`${base}_file_list.txt`, `${lines.length} files\n${lines.join('\n')}\n`, msg, `${lines.length} files listed`);
+  });
+
   async function saveFile(filename, bytes, msg, savedNote) {
     msg.textContent = '';
     if (window.claude && window.claude.use) {
@@ -381,7 +389,7 @@ footer p { margin: 0 0 6px; }
       }
     }
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }));
+    a.href = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
     a.download = filename;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 10000);

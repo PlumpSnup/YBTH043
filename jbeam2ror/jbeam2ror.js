@@ -1062,13 +1062,15 @@
       mass = Math.min(200, Math.max(4, mass));
       const nodeMass = mass / (2 * rays);
       const psi = num(p.pressurePSI, 30);
-      let spring = Math.min(1.2e6, Math.max(1e5, 13000 * psi));
-      let damp = 2 * 0.5 * Math.sqrt(spring * nodeMass);
-      // Explicit-integration stability limits (each tread node has ~3 springs)
-      const kMax = nodeMass * Math.pow(2 / PHYSICS_DT, 2) * 0.25 / 3;
-      const cMax = nodeMass * (2 / PHYSICS_DT) * 0.5 / 3;
-      spring = Math.min(spring, kMax);
-      damp = Math.min(damp, cMax);
+      // RoR builds each wheel as two rings of 'rays' light nodes; every tread node has
+      // 6 tyre/rim beams with this spring and damping, plus 4 tread neighbours of the
+      // same mass. Stability of RoR's integrator needs, per mode,
+      // (k dt^2 + 2 c dt) * G / m < 4 with G <= 11 for that layout (Gershgorin bound),
+      // and RoR stiffens the spokes on its own when a tread node stretches outward,
+      // so we keep a margin. Spring takes under half the budget, damping the rest.
+      const G = 11, budget = (4 / 1.35) * nodeMass / G;
+      let spring = Math.min(1.2e6, Math.max(1e5, 13000 * psi), 0.45 * budget / (PHYSICS_DT * PHYSICS_DT));
+      let damp = Math.min(0.3 * 2 * Math.sqrt(spring * nodeMass), 0.85 * (budget - spring * PHYSICS_DT * PHYSICS_DT) / (2 * PHYSICS_DT));
       const brakeTorque = num(p.brakeTorque, 0);
       const parkTorque = num(p.parkingTorque, 0);
       const braked = p.enableBrakes === false ? 0 : (brakeTorque > 0 || p.brakeTorque === undefined) ? (parkTorque > 0 ? 1 : 4) : 0;
@@ -1259,7 +1261,7 @@
       // 3) Around wherever it still blows up, apply the guaranteed-stable mass, growing the area.
       let area = new Set();
       for (let round = 0; round < 6 && !selfTest.stable && fixOn; round++) {
-        if (selfTest.firstBlow) area.add(selfTest.firstBlow.node);
+        if (selfTest.firstBlow && selfTest.firstBlow.node) area.add(selfTest.firstBlow.node);
         for (const id of selfTest.hotNodes.slice(0, 3)) area.add(id);
         const grown = new Set(area);
         for (const id of area) for (const nb of adj.get(id) || []) grown.add(nb);
@@ -1485,27 +1487,65 @@
   /**
    * Minimal soft-body simulation with the same integrator and time step as RoR
    * (semi-implicit Euler at 2000 Hz). Drops the vehicle onto flat ground for 2.5 s.
-   * Wheels are approximated as stiff springs between the axle nodes and the ground.
+   * Wheels are built exactly like RoR's "wheels" section (ActorSpawner::BuildWheel*):
+   * two rings of tread nodes with tyre/rim beams, the spokes being RoR shocks that
+   * stiffen toward the engine's default beam values when stretched.
    */
   function simulateDrop(nodes, beams, shocks, hydros, wheels, up, slidenodes) {
     const ids = [...nodes.keys()];
     const ix = new Map(ids.map((id, i) => [id, i]));
-    const n = ids.length;
+    const nChassis = ids.length;
+    const n = nChassis + wheels.reduce((s, w) => s + 2 * w.rays, 0);
     const pos = new Float64Array(n * 3), vel = new Float64Array(n * 3), frc = new Float64Array(n * 3), mass = new Float64Array(n);
+    const owner = new Array(n).fill(null); // wheel name for generated tread nodes
     // Rotate so that "up" is +Y for the ground test
     const yAxis = v3.norm(up);
-    for (let i = 0; i < n; i++) {
+    const P = (p) => [p[0], v3.dot(p, yAxis), p[2]];
+    for (let i = 0; i < nChassis; i++) {
       const nd = nodes.get(ids[i]);
-      pos[i * 3] = nd.pos[0]; pos[i * 3 + 1] = v3.dot(nd.pos, yAxis); pos[i * 3 + 2] = nd.pos[2];
+      const q = P(nd.pos);
+      pos[i * 3] = q[0]; pos[i * 3 + 1] = q[1]; pos[i * 3 + 2] = q[2];
       mass[i] = nd.weight;
     }
-    const wheelLoad = [];
+    const springs = [];
+    const addIdx = (i, j, k, c, precomp, deform, shock) => {
+      const dx = pos[j * 3] - pos[i * 3], dy = pos[j * 3 + 1] - pos[i * 3 + 1], dz = pos[j * 3 + 2] - pos[i * 3 + 2];
+      const L = Math.hypot(dx, dy, dz);
+      if (L < 1e-6) return;
+      springs.push({ i, j, k, c, L0: L * precomp, Lr: L, deform, shock: shock || null });
+    };
+    let next = nChassis;
+    const spoke = { sb: 0.66, lb: 0, hardK: 9000000, hardD: 12000 }; // RoR DEFAULT_SPRING / DEFAULT_DAMP
     for (const w of wheels) {
       const a = ix.get(w.n1), b = ix.get(w.n2);
-      mass[a] += w.mass / 2; mass[b] += w.mass / 2;
-      wheelLoad.push({ a, b, r: w.radius, k: w.spring * 0.75, c: w.damp * 4 });
+      const pa = [pos[a * 3], pos[a * 3 + 1], pos[a * 3 + 2]], pb = [pos[b * 3], pos[b * 3 + 1], pos[b * 3 + 2]];
+      const axis = v3.norm(v3.sub(pb, pa));
+      let ray = v3.scale(v3.norm(v3.cross(axis, Math.abs(axis[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0])), w.radius);
+      const ang = -Math.PI / w.rays, ca = Math.cos(ang), sa = Math.sin(ang);
+      const rot = (v) => v3.add(v3.add(v3.scale(v, ca), v3.scale(v3.cross(axis, v), sa)), v3.scale(axis, v3.dot(axis, v) * (1 - ca)));
+      const base = next;
+      for (let r = 0; r < w.rays; r++) {
+        for (const [hub, hp] of [[a, pa], [b, pb]]) {
+          const q = v3.add(hp, ray);
+          ray = rot(ray);
+          pos[next * 3] = q[0]; pos[next * 3 + 1] = q[1]; pos[next * 3 + 2] = q[2];
+          mass[next] = w.mass / (2 * w.rays);
+          owner[next] = w.name;
+          next++;
+        }
+      }
+      for (let r = 0; r < w.rays; r++) {
+        const o = base + r * 2, inn = o + 1, no = base + ((r + 1) % w.rays) * 2, ni = no + 1;
+        addIdx(a, o, w.spring, w.damp, 1, Infinity, spoke);
+        addIdx(b, inn, w.spring, w.damp, 1, Infinity, spoke);
+        addIdx(b, o, w.spring, w.damp, 1, Infinity);
+        addIdx(a, inn, w.spring, w.damp, 1, Infinity);
+        addIdx(o, inn, w.spring, w.damp, 1, Infinity);
+        addIdx(o, no, w.spring, w.damp, 1, Infinity);
+        addIdx(inn, ni, w.spring, w.damp, 1, Infinity);
+        addIdx(inn, no, w.spring, w.damp, 1, Infinity);
+      }
     }
-    const springs = [];
     const addSpring = (a, b, k, c, precomp, deform, shock) => {
       const i = ix.get(a), j = ix.get(b);
       const dx = pos[j * 3] - pos[i * 3], dy = pos[j * 3 + 1] - pos[i * 3 + 1], dz = pos[j * 3 + 2] - pos[i * 3 + 2];
@@ -1519,7 +1559,6 @@
     const slides = (slidenodes || []).map((sn) => ({ i: ix.get(sn.id), rail: sn.rail.map((r) => ix.get(r)), k: sn.spring }));
     // Ground: lowest wheel bottom (or lowest node) sits 2 cm above y=0
     let ground = Infinity;
-    for (const w of wheelLoad) ground = Math.min(ground, Math.min(pos[w.a * 3 + 1], pos[w.b * 3 + 1]) - w.r);
     for (let i = 0; i < n; i++) ground = Math.min(ground, pos[i * 3 + 1]);
     ground -= 0.02;
     const dt = PHYSICS_DT, g = 9.81;
@@ -1535,15 +1574,6 @@
           const kg = 0.2 * mass[i] / (dt * dt), cg = 0.2 * mass[i] / dt;
           frc[i * 3 + 1] += kg * pen - cg * Math.min(0, vel[i * 3 + 1]);
           frc[i * 3] -= cg * 0.5 * vel[i * 3]; frc[i * 3 + 2] -= cg * 0.5 * vel[i * 3 + 2];
-        }
-      }
-      for (const w of wheelLoad) {
-        for (const q of [w.a, w.b]) {
-          const pen = ground + w.r - pos[q * 3 + 1];
-          if (pen > 0) {
-            frc[q * 3 + 1] += w.k * pen - w.c * Math.min(0, vel[q * 3 + 1]);
-            frc[q * 3] -= w.c * vel[q * 3]; frc[q * 3 + 2] -= w.c * vel[q * 3 + 2];
-          }
         }
       }
       // slidenodes: pull the node back onto the nearest point of its rail (sideways only)
@@ -1599,7 +1629,7 @@
       if (s % 10 === 0 || s === steps - 1) {
         for (let i = 0; i < n; i++) {
           const sp2 = vel[i * 3] ** 2 + vel[i * 3 + 1] ** 2 + vel[i * 3 + 2] ** 2;
-          if (!isFinite(sp2) || sp2 > 60 * 60) { if (!blew) { blew = true; firstBlow = { node: ids[i], t: +(s * dt).toFixed(4) }; } }
+          if (!isFinite(sp2) || sp2 > 60 * 60) { if (!blew) { blew = true; firstBlow = i < nChassis ? { node: ids[i], t: +(s * dt).toFixed(4) } : { node: null, wheel: owner[i], t: +(s * dt).toFixed(4) }; } }
           energy[i] = Math.max(energy[i], isFinite(sp2) ? sp2 : 1e30);
           if (s > steps * 0.7) maxSpeedLate = Math.max(maxSpeedLate, Math.sqrt(sp2) || Infinity);
         }
@@ -1619,7 +1649,7 @@
     const stable = !blew && maxSpeedLate < 3 && collapsed === 0;
     // Nodes with the most kinetic energy are the likely culprits
     const order = [...energy.keys()].sort((a, b) => energy[b] - energy[a]);
-    const hotNodes = stable ? [] : order.slice(0, Math.max(1, Math.ceil(n * 0.03))).map((i) => ids[i]);
+    const hotNodes = stable ? [] : order.filter((i) => i < nChassis).slice(0, Math.max(1, Math.ceil(nChassis * 0.03))).map((i) => ids[i]);
     let minY = Infinity;
     for (let i = 0; i < n; i++) minY = Math.min(minY, pos[i * 3 + 1]);
     return { stable, firstBlow, maxSpeedLate: +maxSpeedLate.toFixed(3), maxStrain: +maxStrain.toFixed(3), collapsedBeams: collapsed, hotNodes, seconds: 2.5 };
@@ -1717,7 +1747,7 @@
     }));
   }
 
-  const api = { parseJBeam, evalExpression, openZip, makeZip, loadLibrary, listVehicles, convert, buildModZip, filesToEntries, crc32 };
+  const api = { _simulateDrop: simulateDrop, parseJBeam, evalExpression, openZip, makeZip, loadLibrary, listVehicles, convert, buildModZip, filesToEntries, crc32 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.J2R = api;
 })(typeof self !== 'undefined' ? self : this);
