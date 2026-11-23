@@ -555,7 +555,11 @@
    * Returns { truck, files: [{path,data}], report: {warnings, stats}, fileBase }
    */
   function convert(lib, opts) {
-    opts = Object.assign({ cab: true, visibleBeams: true }, opts || {});
+    // visibleBeams: draw the node/beam skeleton in RoR (off: it hides the body and costs FPS)
+    // cabCollision: make body panels solid. Off by default: RoR always self-collides solid
+    // panels with the vehicle's own nodes, and BeamNG cars have many nodes right next to
+    // their panels, which makes the car push itself apart and float.
+    opts = Object.assign({ cab: true, visibleBeams: false, cabCollision: false }, opts || {});
     const warnings = [];
     const warnOnce = new Set();
     const warn = (msg) => { if (!warnOnce.has(msg)) { warnOnce.add(msg); warnings.push(msg); } };
@@ -1344,7 +1348,7 @@
       for (const [g, list] of groupBy(shocks, (s) => `${fmt(s.hardK)}, ${fmt(s.hardD)}, ${fmt(s.deform)}, ${fmt(s.strength)}`)) {
         L.push(`set_beam_defaults ${g}`);
         L.push('shocks');
-        for (const s of list) L.push(`${N(s.a)}, ${N(s.b)}, ${fmt(s.spring)}, ${fmt(s.damp)}, ${fmt(s.sb, 4)}, ${fmt(s.lb, 4)}, ${fmt(s.precomp, 4)}, n`);
+        for (const s of list) L.push(`${N(s.a)}, ${N(s.b)}, ${fmt(s.spring)}, ${fmt(s.damp)}, ${fmt(s.sb, 4)}, ${fmt(s.lb, 4)}, ${fmt(s.precomp, 4)}, ${opts.visibleBeams ? 'n' : 'i'}`);
       }
       L.push('');
     }
@@ -1361,7 +1365,7 @@
       for (const [g, list] of groupBy(steering, groupKey)) {
         L.push(`set_beam_defaults ${g}`);
         L.push('hydros');
-        for (const h of list) L.push(`${N(h.a)}, ${N(h.b)}, ${fmt(h.factor, 4)}, n`);
+        for (const h of list) L.push(`${N(h.a)}, ${N(h.b)}, ${fmt(h.factor, 4)}, ${opts.visibleBeams ? 'n' : 'i'}`);
       }
       L.push('');
     }
@@ -1422,7 +1426,7 @@
         L.push(`${N(id)}, ${fmt(u, 4)}, ${fmt(v, 4)}`);
       }
       L.push('cab');
-      for (const t of cabTris) L.push(`${t.ids.map(N).join(', ')}, ${t.collide ? 'c' : 'n'}`);
+      for (const t of cabTris) L.push(`${t.ids.map(N).join(', ')}, ${t.collide && opts.cabCollision ? 'c' : 'n'}`);
       L.push('');
     }
 

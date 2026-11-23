@@ -18,7 +18,8 @@ Options:
   --out <dir>           Where to write the RoR mod zip (default: current dir)
   --list                List vehicles and configurations, then exit
   --no-cab              Don't create the collision/body surface
-  --hide-beams          Make beams invisible in RoR`);
+  --show-beams          Draw the node/beam skeleton in RoR
+  --cab-collision       Make body panels solid (can make BeamNG cars float in RoR)`);
 }
 
 async function openSource(p) {
@@ -42,7 +43,7 @@ async function openSource(p) {
 (async () => {
   const args = process.argv.slice(2);
   if (!args.length || args.includes('-h') || args.includes('--help')) { usage(); process.exit(args.length ? 0 : 1); }
-  const opts = { extra: [], cab: true, visibleBeams: true };
+  const opts = { extra: [], cab: true, visibleBeams: false, cabCollision: false };
   let input = null;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -52,7 +53,8 @@ async function openSource(p) {
     else if (a === '--out') opts.out = args[++i];
     else if (a === '--list') opts.list = true;
     else if (a === '--no-cab') opts.cab = false;
-    else if (a === '--hide-beams') opts.visibleBeams = false;
+    else if (a === '--show-beams') opts.visibleBeams = true;
+    else if (a === '--cab-collision') opts.cabCollision = true;
     else if (!input) input = a;
     else { console.error(`Unknown argument: ${a}`); process.exit(1); }
   }

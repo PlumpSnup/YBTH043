@@ -44,11 +44,17 @@ const check = (cond, msg) => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${msg}`); 
   const num = (name) => (truck.match(new RegExp(`^(\\d+), .* ;${name}$`, 'm')) || [])[1];
 
   // Steering signs: left and right hydros must have opposite factors that turn the wheels right on "right"
-  const hy = [...truck.matchAll(/^(\d+), (\d+), (-?[\d.]+), n$/gm)].filter((x) => x[1] === num('fs1l') || x[1] === num('fs1r')).sort((a, b) => (a[1] === num('fs1l') ? -1 : 1)).map((x) => +x[3]);
+  const hy = [...truck.matchAll(/^(\d+), (\d+), (-?[\d.]+), [ni]$/gm)].filter((x) => x[1] === num('fs1l') || x[1] === num('fs1r')).sort((a, b) => (a[1] === num('fs1l') ? -1 : 1)).map((x) => +x[3]);
   check(hy.length === 2 && hy[0] < 0 && hy[1] > 0, `steering factors ${hy.join(', ')}`);
 
   // Wheels: axis order consistent (left wheel node1 inner, right wheel node1 outer)
   check(new RegExp(`16, ${num('fw1l')}, ${num('fw2l')}, 9999`).test(truck) && new RegExp(`16, ${num('fw2r')}, ${num('fw1r')}, 9999`).test(truck), 'wheel axes ordered for forward drive');
+
+  // Defaults that keep BeamNG cars from floating / hidden under their skeleton in RoR
+  const cabLines = truck.slice(truck.indexOf('\ncab\n')).split('\n').slice(2).filter((l) => /^\d/.test(l));
+  check(cabLines.length > 0 && cabLines.every((l) => l.endsWith(', n')), 'body panels drawn but not solid (no RoR self-collision push)');
+  const beamLines = truck.slice(truck.indexOf('\nbeams\n')).split('\n').slice(2).filter((l) => /^\d+, \d+/.test(l)).slice(0, 50);
+  check(beamLines.every((l) => /, s?i$/.test(l)), 'beam skeleton hidden by default');
 
   // Zip round-trip
   const zip = J2R.buildModZip(r);
