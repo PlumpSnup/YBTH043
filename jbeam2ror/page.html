@@ -1,0 +1,378 @@
+<title>JBeam to RoR</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a single workshop spec sheet. Three numbered steps down the left, the conversion report on the right; stacks on phones. */
+:root {
+  --paper: #eef1f4;
+  --sheet: #ffffff;
+  --ink: #17212c;
+  --muted: #5a6877;
+  --line: #d3dae2;
+  --amber: #b85c00;
+  --amber-soft: #fdf0e1;
+  --ok: #1d7a46;
+  --ok-soft: #e3f3e9;
+  --bad: #b3261e;
+  --bad-soft: #fbe7e5;
+  --grid: rgba(23, 33, 44, 0.05);
+  --f-display: "Barlow Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --f-body: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #12171d; --sheet: #1a2129; --ink: #e4e9ee; --muted: #9aa7b4; --line: #2d3742;
+    --amber: #f0a04b; --amber-soft: #3a2a17; --ok: #5cc98a; --ok-soft: #173326; --bad: #f2867e; --bad-soft: #3b1d1b;
+    --grid: rgba(228, 233, 238, 0.04); color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #12171d; --sheet: #1a2129; --ink: #e4e9ee; --muted: #9aa7b4; --line: #2d3742;
+  --amber: #f0a04b; --amber-soft: #3a2a17; --ok: #5cc98a; --ok-soft: #173326; --bad: #f2867e; --bad-soft: #3b1d1b;
+  --grid: rgba(228, 233, 238, 0.04); color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--paper);
+  background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 24px 24px;
+  color: var(--ink);
+  font: 15px/1.55 var(--f-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 48px;
+}
+.wrap { max-width: 1120px; margin: 0 auto; display: grid; gap: 22px; }
+header { display: grid; gap: 6px; }
+.eyebrow { font: 600 12px/1 var(--f-mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--amber); }
+h1 { font: 700 clamp(34px, 6vw, 52px)/1 var(--f-display); letter-spacing: 0.01em; margin: 0; text-wrap: balance; }
+h1 .arrow { color: var(--amber); }
+.lede { margin: 0; color: var(--muted); max-width: 66ch; }
+.cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 22px; align-items: start; }
+@media (max-width: 860px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+.sheet { background: var(--sheet); border: 1px solid var(--line); border-radius: 6px; }
+.steps { display: grid; }
+.step { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 14px; padding: 18px 20px; border-top: 1px solid var(--line); }
+.step:first-child { border-top: 0; }
+.num { font: 700 26px/1 var(--f-display); color: var(--amber); }
+.step h2 { font: 600 20px/1.15 var(--f-display); letter-spacing: 0.02em; margin: 2px 0 6px; }
+.step p { margin: 0 0 10px; color: var(--muted); font-size: 14px; }
+.drop {
+  border: 1.5px dashed var(--line); border-radius: 6px; padding: 16px; display: grid; gap: 8px; justify-items: start;
+  transition: border-color .15s, background .15s;
+}
+.drop.over { border-color: var(--amber); background: var(--amber-soft); }
+.drop .picked { font: 500 13px/1.4 var(--f-mono); color: var(--ink); word-break: break-all; }
+.drop .picked:empty::before { content: "Nothing chosen yet"; color: var(--muted); font-family: var(--f-body); }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+button, .btn, select {
+  font: 500 14px/1 var(--f-body); color: var(--ink); background: var(--sheet); border: 1px solid var(--line);
+  border-radius: 4px; padding: 9px 12px; cursor: pointer;
+}
+button:hover, .btn:hover { border-color: var(--muted); }
+button:focus-visible, select:focus-visible, .btn:focus-within { outline: 2px solid var(--amber); outline-offset: 2px; }
+button.primary { background: var(--amber); border-color: var(--amber); color: var(--sheet); font-weight: 600; padding: 11px 18px; }
+button.primary:hover { filter: brightness(1.08); }
+button:disabled { opacity: .5; cursor: default; filter: none; }
+.btn input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.btn { position: relative; display: inline-flex; }
+select { min-width: 0; max-width: 100%; }
+label.field { display: grid; gap: 4px; font-size: 13px; color: var(--muted); min-width: 0; flex: 1 1 200px; }
+.report { padding: 20px; display: grid; gap: 18px; }
+.report-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; justify-content: space-between; }
+.report-head h2 { font: 600 24px/1.1 var(--f-display); margin: 0; letter-spacing: .01em; }
+.tag { font: 500 12px/1 var(--f-mono); padding: 5px 8px; border-radius: 3px; background: var(--paper); color: var(--muted); border: 1px solid var(--line); }
+.badge { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 4px; font-size: 14px; }
+.badge.ok { background: var(--ok-soft); color: var(--ok); }
+.badge.bad { background: var(--bad-soft); color: var(--bad); }
+.badge b { font-weight: 600; }
+.badge svg { flex: none; margin-top: 1px; }
+dl.specs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; margin: 0; }
+@media (max-width: 560px) { dl.specs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+dl.specs div { background: var(--sheet); padding: 10px 12px; display: grid; gap: 3px; }
+dt { font: 500 11px/1 var(--f-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+dd { margin: 0; font: 600 20px/1.15 var(--f-display); font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+dd small { font: 400 13px var(--f-body); color: var(--muted); }
+h3 { font: 600 13px/1 var(--f-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+ul.notes { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 14px; }
+.empty { color: var(--muted); font-size: 14px; margin: 0; }
+details { border: 1px solid var(--line); border-radius: 4px; }
+summary { cursor: pointer; padding: 10px 12px; font-size: 14px; font-weight: 500; }
+pre { margin: 0; max-height: 340px; overflow: auto; padding: 12px; border-top: 1px solid var(--line); font: 12px/1.5 var(--f-mono); background: var(--paper); }
+.install { font-size: 14px; color: var(--muted); margin: 0; }
+.install code, .mono { font: 13px var(--f-mono); color: var(--ink); background: var(--paper); padding: 1px 5px; border-radius: 3px; overflow-wrap: anywhere; }
+.status { font: 13px/1.4 var(--f-mono); color: var(--muted); min-height: 1.4em; }
+.status.err { color: var(--bad); }
+.example-note { font-size: 13px; color: var(--amber); background: var(--amber-soft); padding: 8px 12px; border-radius: 4px; margin: 0; }
+footer { color: var(--muted); font-size: 13px; max-width: 80ch; }
+footer p { margin: 0 0 6px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">BeamNG.drive → Rigs of Rods · physics converter</div>
+    <h1>JBeam <span class="arrow">→</span> .truck</h1>
+    <p class="lede">Turn a BeamNG car mod into a Rigs of Rods vehicle: nodes, beams, suspension, steering, wheels and engine. Every conversion is drop-tested in a 2000&nbsp;Hz physics simulation before you download it. Your files never leave this browser.</p>
+  </header>
+
+  <div class="cols">
+    <section class="sheet steps" aria-label="Steps">
+      <div class="step">
+        <div class="num">1</div>
+        <div>
+          <h2>Choose the BeamNG mod</h2>
+          <p>The mod's <span class="mono">.zip</span>, or its unpacked folder.</p>
+          <div class="drop" id="dropMod">
+            <div class="row">
+              <label class="btn" for="modZip">Choose .zip<input type="file" id="modZip" accept=".zip"></label>
+              <label class="btn" for="modDir">Choose folder<input type="file" id="modDir" webkitdirectory multiple></label>
+            </div>
+            <span class="picked" id="modName"></span>
+          </div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="num">2</div>
+        <div>
+          <h2>Add BeamNG's shared parts <small style="font:400 14px var(--f-body);color:var(--muted)">(usually needed)</small></h2>
+          <p>Most mods borrow tires, wheels and engines from the game's own files. Add <span class="mono">BeamNG.drive/content/vehicles/common.zip</span>. If the mod is a new configuration for a car that came with the game, add that car's zip too. Only the physics files inside are read, so large zips are fine.</p>
+          <div class="drop" id="dropExtra">
+            <div class="row">
+              <label class="btn" for="extraZip">Add .zip files<input type="file" id="extraZip" accept=".zip" multiple></label>
+              <button type="button" id="clearExtra">Clear</button>
+            </div>
+            <span class="picked" id="extraName"></span>
+          </div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="num">3</div>
+        <div>
+          <h2>Pick the car and convert</h2>
+          <p>Each <span class="mono">.pc</span> configuration is a different build of the car (engine, suspension, tires).</p>
+          <div class="row" style="margin-bottom:12px">
+            <label class="field" for="vehSel">Vehicle<select id="vehSel" disabled><option>Load a mod first</option></select></label>
+            <label class="field" for="cfgSel">Configuration<select id="cfgSel" disabled><option>—</option></select></label>
+          </div>
+          <div class="row">
+            <button type="button" class="primary" id="convertBtn" disabled>Convert</button>
+            <label style="font-size:14px;display:flex;gap:6px;align-items:center" for="hideBeams"><input type="checkbox" id="hideBeams"> Hide beams in RoR</label>
+          </div>
+          <div class="status" id="status" role="status" aria-live="polite"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="sheet report" id="report" aria-live="polite">
+      <p class="empty">Converting…</p>
+    </section>
+  </div>
+
+  <footer>
+    <p>What carries over: the soft-body structure with BeamNG's node masses and beam stiffness, damping and deformation; springs and dampers; collision triangles; wheel size, mass and grip; brakes; steering direction (worked out from the steering geometry); and the engine torque curve, gears and final drive.</p>
+    <p>What doesn't: the 3D model (the body is drawn flat from the collision triangles), textures, lights, sounds, scripted features (ABS, ESC, electrics) and anti-roll bars. Convert only mods whose license lets you.</p>
+  </footer>
+</div>
+
+<!--LIB-->
+<script>
+(function () {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const state = { mod: null, extras: [], lib: null, result: null, isExample: false };
+
+  function setStatus(msg, err) { $('status').textContent = msg || ''; $('status').classList.toggle('err', !!err); }
+
+  async function sourceFromZip(file) { return { name: file.name, entries: await J2R.openZip(file) }; }
+  function sourceFromFiles(name, files) { return { name, entries: J2R.filesToEntries(files) }; }
+
+  // Drag and drop: zip files or folders
+  async function entriesFromDrop(dt) {
+    const items = [...(dt.items || [])];
+    const out = [];
+    const walk = (entry, prefix) => new Promise((res) => {
+      if (entry.isFile) entry.file((f) => { out.push({ file: f, path: prefix + f.name }); res(); }, () => res());
+      else if (entry.isDirectory) {
+        const reader = entry.createReader();
+        const all = [];
+        const readBatch = () => reader.readEntries(async (batch) => {
+          if (!batch.length) { for (const e of all) await walk(e, prefix + entry.name + '/'); res(); }
+          else { all.push(...batch); readBatch(); }
+        }, () => res());
+        readBatch();
+      } else res();
+    });
+    const roots = items.map((it) => it.webkitGetAsEntry && it.webkitGetAsEntry()).filter(Boolean);
+    if (!roots.length) return { files: [...(dt.files || [])].map((f) => ({ file: f, path: f.name })), dirName: null };
+    for (const r of roots) await walk(r, '');
+    return { files: out, dirName: roots.length === 1 && roots[0].isDirectory ? roots[0].name : null };
+  }
+
+  function wireDrop(el, onDrop) {
+    el.addEventListener('dragover', (e) => { e.preventDefault(); el.classList.add('over'); });
+    el.addEventListener('dragleave', () => el.classList.remove('over'));
+    el.addEventListener('drop', async (e) => {
+      e.preventDefault(); el.classList.remove('over');
+      try { await onDrop(await entriesFromDrop(e.dataTransfer)); } catch (err) { setStatus(err.message, true); }
+    });
+  }
+
+  async function setMod(source, label) {
+    state.mod = source; state.isExample = false;
+    $('modName').textContent = label;
+    await reload();
+  }
+
+  $('modZip').addEventListener('change', async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    try { await setMod(await sourceFromZip(f), f.name); } catch (err) { setStatus(`Couldn't open ${f.name}: ${err.message}`, true); }
+  });
+  $('modDir').addEventListener('change', async (e) => {
+    const files = [...e.target.files]; if (!files.length) return;
+    const name = (files[0].webkitRelativePath || '').split('/')[0] || 'folder';
+    await setMod(sourceFromFiles(name, files), `${name}/ (${files.length} files)`);
+  });
+  wireDrop($('dropMod'), async ({ files, dirName }) => {
+    const zip = files.find((f) => /\.zip$/i.test(f.path));
+    if (zip && !dirName) await setMod(await sourceFromZip(zip.file), zip.file.name);
+    else {
+      const entries = files.map(({ file, path }) => ({ path: dirName ? path.slice(dirName.length + 1) : path, size: file.size, read: async () => new Uint8Array(await file.arrayBuffer()) }));
+      state.mod = { name: dirName || 'files', entries }; state.isExample = false;
+      $('modName').textContent = `${dirName || 'files'}/ (${files.length} files)`;
+      await reload();
+    }
+  });
+
+  async function addExtras(files) {
+    for (const f of files) {
+      try { state.extras.push(await sourceFromZip(f)); } catch (err) { setStatus(`Couldn't open ${f.name}: ${err.message}`, true); }
+    }
+    $('extraName').textContent = state.extras.map((s) => s.name).join(', ');
+    if (state.mod) await reload();
+  }
+  $('extraZip').addEventListener('change', (e) => addExtras([...e.target.files]));
+  wireDrop($('dropExtra'), ({ files }) => addExtras(files.filter((f) => /\.zip$/i.test(f.path)).map((f) => f.file)));
+  $('clearExtra').addEventListener('click', async () => { state.extras = []; $('extraName').textContent = ''; $('extraZip').value = ''; if (state.mod) await reload(); });
+
+  async function reload() {
+    $('convertBtn').disabled = true;
+    setStatus('Reading physics files…');
+    try {
+      state.lib = await J2R.loadLibrary([state.mod, ...state.extras], (m) => setStatus(m));
+      const vehicles = J2R.listVehicles(state.lib);
+      const vs = $('vehSel');
+      vs.innerHTML = '';
+      if (!vehicles.length) {
+        vs.innerHTML = '<option>No vehicle found</option>'; vs.disabled = true; $('cfgSel').disabled = true;
+        setStatus('No vehicle found in this mod. A BeamNG car needs a part with "slotType": "main". If this is a parts-only mod, add the car it belongs to in step 2.', true);
+        return;
+      }
+      for (const v of vehicles) {
+        const o = document.createElement('option');
+        o.value = v.model; o.textContent = v.title && v.title !== v.model ? `${v.title} (${v.model})` : v.model;
+        vs.appendChild(o);
+      }
+      vs.disabled = vehicles.length < 2;
+      fillConfigs();
+      $('convertBtn').disabled = false;
+      setStatus(`Found ${vehicles.length} vehicle${vehicles.length > 1 ? 's' : ''} and ${state.lib.parts.size} parts.`);
+    } catch (err) { setStatus(err.message, true); }
+  }
+  function fillConfigs() {
+    const v = J2R.listVehicles(state.lib).find((x) => x.model === $('vehSel').value);
+    const cs = $('cfgSel');
+    cs.innerHTML = '';
+    if (!v || !v.configs.length) { cs.innerHTML = '<option value="">Default parts</option>'; cs.disabled = true; return; }
+    for (const c of v.configs) { const o = document.createElement('option'); o.value = c; o.textContent = c; cs.appendChild(o); }
+    cs.disabled = v.configs.length < 2;
+  }
+  $('vehSel').addEventListener('change', fillConfigs);
+
+  $('convertBtn').addEventListener('click', () => {
+    setStatus('Converting and drop-testing…');
+    setTimeout(() => {
+      try {
+        state.result = J2R.convert(state.lib, { model: $('vehSel').value, config: $('cfgSel').value || null, visibleBeams: !$('hideBeams').checked });
+        renderReport();
+        setStatus('');
+      } catch (err) { setStatus(err.message, true); }
+    }, 20);
+  });
+
+  const ICON_OK = '<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="8" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5 9.2l2.6 2.6L13 6.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const ICON_BAD = '<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M9 1.8l7.4 13.4H1.6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 7v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="9" cy="13.2" r="1" fill="currentColor"/></svg>';
+
+  function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]); }
+
+  function renderReport() {
+    const r = state.result, s = r.report.stats, st = r.report.selfTest;
+    const notes = r.report.warnings;
+    const badge = !st ? '' : st.stable
+      ? `<div class="badge ok">${ICON_OK}<span><b>Drop test passed.</b> Dropped onto flat ground for ${st.seconds}&nbsp;s at RoR's 2000&nbsp;Hz step, it settled with no beam stretched more than ${(st.maxStrain * 100).toFixed(1)}%.</span></div>`
+      : `<div class="badge bad">${ICON_BAD}<span><b>Drop test failed.</b> The vehicle stayed unstable after automatic fixes, so it may shake or come apart in RoR. The notes below say what was tried.</span></div>`;
+    $('report').innerHTML = `
+      ${state.isExample ? '<p class="example-note">Example: this is the built-in test car. Choose your own mod on the left to convert it.</p>' : ''}
+      <div class="report-head"><h2>${esc(s.vehicle)}</h2><span class="tag">${esc(s.config)}</span></div>
+      ${badge}
+      <dl class="specs">
+        <div><dt>Mass</dt><dd>${s.massKg.toLocaleString()} <small>kg</small></dd></div>
+        <div><dt>Nodes</dt><dd>${s.nodes.toLocaleString()}</dd></div>
+        <div><dt>Beams</dt><dd>${s.beams.toLocaleString()}</dd></div>
+        <div><dt>Springs &amp; dampers</dt><dd>${s.shocks}</dd></div>
+        <div><dt>Wheels</dt><dd>${s.wheels} <small>${s.drivenWheels} driven</small></dd></div>
+        <div><dt>Steering hydros</dt><dd>${s.steeringHydros}</dd></div>
+        <div><dt>Body triangles</dt><dd>${s.triangles.toLocaleString()}</dd></div>
+        <div><dt>Parts used</dt><dd>${s.parts}</dd></div>
+      </dl>
+      <div><h3>Engine</h3><p class="empty" style="color:var(--ink)">${esc(s.engine)}</p></div>
+      <div><h3>Notes</h3>${notes.length ? `<ul class="notes">${notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : '<p class="empty">Nothing to report. Everything converted.</p>'}</div>
+      ${r.report.loadErrors.length ? `<div><h3>Files that couldn't be read</h3><ul class="notes">${r.report.loadErrors.map((n) => `<li class="mono">${esc(n)}</li>`).join('')}</ul></div>` : ''}
+      <div class="row"><button type="button" class="primary" id="saveBtn">Download ${esc(r.fileBase)}.zip</button><span class="status" id="saveStatus"></span></div>
+      <p class="install">Put the zip, unopened, in <code>Documents/My Games/Rigs of Rods/mods</code>, then pick <b>${esc(r.truck.split('\n')[0])}</b> in RoR's vehicle selector.</p>
+      <details><summary>Show the .truck file</summary><pre>${esc(r.truck)}</pre></details>`;
+    $('saveBtn').addEventListener('click', save);
+  }
+
+  let downloads;
+  const downloadsReady = (window.claude && window.claude.use) ? window.claude.use('downloads').then((d) => (downloads = d)).catch(() => null) : Promise.resolve(null);
+
+  async function save() {
+    const r = state.result; if (!r) return;
+    const bytes = J2R.buildModZip(r);
+    const filename = `${r.fileBase}.zip`;
+    const msg = $('saveStatus');
+    msg.textContent = '';
+    if (window.claude && window.claude.use) {
+      await downloadsReady;
+      if (downloads) {
+        try { await downloads.save({ filename, data: new Blob([bytes]) }); msg.textContent = 'Saved.'; }
+        catch (e) { msg.textContent = e && e.code === 'declined' ? 'Download cancelled.' : `Couldn't save: ${(e && e.message) || 'unavailable here'}`; }
+        return;
+      }
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }));
+    a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  }
+
+  // Open with a real conversion of the built-in test car so the page shows what it produces.
+  (async () => {
+    try {
+      const { modZip, commonZip } = J2R_SAMPLE.buildSample(J2R);
+      const lib = await J2R.loadLibrary([
+        { name: 'testcar_mod.zip', entries: await J2R.openZip(new Blob([modZip])) },
+        { name: 'common.zip', entries: await J2R.openZip(new Blob([commonZip])) },
+      ]);
+      if (state.mod) return;
+      state.lib = lib; state.isExample = true;
+      state.result = J2R.convert(lib, {});
+      renderReport();
+    } catch (err) { $('report').innerHTML = `<p class="empty">Choose a mod on the left to begin.</p>`; }
+  })();
+})();
+</script>
