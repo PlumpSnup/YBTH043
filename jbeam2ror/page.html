@@ -336,13 +336,37 @@ footer p { margin: 0 0 6px; }
       <div><h3>Notes</h3>${notes.length ? `<ul class="notes">${notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : '<p class="empty">Nothing to report. Everything converted.</p>'}</div>
       ${r.report.loadErrors.length ? `<div><h3>Files that couldn't be read</h3><ul class="notes">${r.report.loadErrors.map((n) => `<li class="mono">${esc(n)}</li>`).join('')}</ul></div>` : ''}
       <div class="row"><button type="button" class="primary" id="saveBtn">Download ${esc(r.fileBase)}.zip</button><span class="status" id="saveStatus"></span></div>
+      <details><summary>Troubleshooting: download a test pack</summary>
+        <div style="padding:0 12px 12px;display:grid;gap:8px;font-size:14px">
+          <p style="margin:0">If the car is unstable in RoR, this zip contains the normal build plus test builds that each change one thing. They show up separately in RoR's vehicle list, named <code>[j2r ${esc(J2R.version)} test A]</code> and so on. Spawn each, leave it for 20 seconds, and note which ones stay in one piece.</p>
+          <ul class="notes">${Object.entries(J2R.experiments).map(([k, v]) => `<li><b>Test ${k}</b>: ${esc(v)}</li>`).join('')}</ul>
+          <div class="row"><button type="button" id="packBtn">Download test pack</button><span class="status" id="packStatus"></span></div>
+        </div>
+      </details>
       <p class="install">Put the zip, unopened, in <code>Documents/My Games/Rigs of Rods/mods</code>, then pick <b>${esc(r.truck.split('\n')[0])}</b> in RoR's vehicle selector.</p>
       <details><summary>Show the .truck file</summary><pre>${esc(r.truck)}</pre></details>`;
     $('saveBtn').addEventListener('click', save);
+    $('packBtn').addEventListener('click', savePack);
   }
 
   let downloads;
   const downloadsReady = (window.claude && window.claude.use) ? window.claude.use('downloads').then((d) => (downloads = d)).catch(() => null) : Promise.resolve(null);
+
+  async function savePack() {
+    const msg = $('packStatus');
+    const files = [];
+    const keys = [null, ...Object.keys(J2R.experiments)];
+    for (let i = 0; i < keys.length; i++) {
+      msg.textContent = `Building ${i + 1} of ${keys.length}…`;
+      await new Promise((res) => setTimeout(res, 20));
+      try {
+        const r = J2R.convert(state.lib, { model: $('vehSel').value, config: $('cfgSel').value || null, visibleBeams: $('showBeams').checked, experiment: keys[i] });
+        files.push(...r.files);
+      } catch (err) { msg.textContent = `Couldn't build: ${err.message}`; return; }
+    }
+    msg.textContent = '';
+    await saveFile(`${state.result.fileBase}_test_pack.zip`, J2R.makeZip(files), msg, `${keys.length} builds`);
+  }
 
   async function save() {
     const r = state.result; if (!r) return;

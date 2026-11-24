@@ -18,7 +18,17 @@
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v9';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v10';      // shown in the vehicle name so RoR logs say which converter version made it
+
+  // Troubleshooting builds: each changes one suspect so a user can find, in the game,
+  // which feature makes a vehicle unstable in RoR.
+  const EXPERIMENTS = {
+    A: 'Soft limits: suspension/driveshaft limiters keep their normal stiffness past the limit',
+    B: 'No slidenodes: strut spring seats and the steering rack are not slide-constrained',
+    C: 'Heavier wheels: 2.5x wheel mass (sturdier tyres)',
+    D: 'No traction control',
+    E: 'Fixed steering: steering hydros become plain beams',
+  };
 
   // BeamNG defaults (used when a JBeam file does not set a value).
   const BNG = {
@@ -561,6 +571,7 @@
     // panels with the vehicle's own nodes, and BeamNG cars have many nodes right next to
     // their panels, which makes the car push itself apart and float.
     opts = Object.assign({ cab: true, visibleBeams: false, cabCollision: false }, opts || {});
+    const X = opts.experiment && EXPERIMENTS[opts.experiment] ? opts.experiment : null;
     const warnings = [];
     const warnOnce = new Set();
     const warn = (msg) => { if (!warnOnce.has(msg)) { warnOnce.add(msg); warnings.push(msg); } };
@@ -857,7 +868,7 @@
           a: String(a), b: String(b), spring: bp.spring, damp,
           sb: Math.min(1, sbM / L0), lb: Math.min(100, lbM / L0),
           precomp: Math.min(3, Math.max(0.2, precomp)),
-          hardK: Math.min(5e8, hard(bp.spring, limitK)), hardD: Math.min(5e5, hard(damp, limitD)),
+          hardK: X === 'A' ? bp.spring : Math.min(5e8, hard(bp.spring, limitK)), hardD: X === 'A' ? damp : Math.min(5e5, hard(damp, limitD)),
           deform: bp.deform, strength: bp.strength,
         });
         continue;
@@ -870,7 +881,7 @@
         shocks.push({
           a: String(a), b: String(b), spring: 0, damp: 0,
           sb: Math.min(1, 1 - precomp), lb: 100, precomp: 1,
-          hardK: Math.min(5e8, bp.spring / Math.max(0.01, stopM)), hardD: Math.min(5e5, bp.damp / Math.max(0.01, stopM)),
+          hardK: X === 'A' ? 0 : Math.min(5e8, bp.spring / Math.max(0.01, stopM)), hardD: X === 'A' ? 0 : Math.min(5e5, bp.damp / Math.max(0.01, stopM)),
           deform: bp.deform, strength: bp.strength, stop: true,
         });
         continue;
@@ -889,7 +900,7 @@
       if (!hasNode(a) || !hasNode(b) || String(a) === String(b)) continue;
       const src = String(props.inputSource || 'steering');
       const bp = beamProps(props);
-      if (/steer/i.test(src)) {
+      if (/steer/i.test(src) && X !== 'E') {
         let f = NaN;
         if (props.factor !== undefined) f = num(props.factor, NaN);
         const inF = num(props.inputFactor, 1);
@@ -952,7 +963,7 @@
       if (isDict(r0)) for (const [rn, rv] of Object.entries(evalValue(r0))) if (isDict(rv)) rails[rn] = rv;
     }
     const slidenodes = [];
-    for (const { cols, props } of rowsOf('slidenodes')) {
+    for (const { cols, props } of (X === 'B' ? [] : rowsOf('slidenodes'))) {
       const id = cols.id, rail = rails[String(cols.railName)];
       if (!hasNode(id) || !rail) continue;
       if (cols.attached === false) continue;
@@ -1113,7 +1124,7 @@
       const rays = Math.round(Math.min(12, Math.max(8, num(p.numRays, 12))));
       const tireW = num(p.nodeWeight, 0.35), hubW = num(p.hubNodeWeight, 0.6);
       const bngRays = Math.round(Math.min(64, Math.max(6, num(p.numRays, 16))));
-      let mass = 2 * bngRays * (tireW + hubW); // BeamNG's wheel mass (hub + tyre nodes)
+      let mass = 2 * bngRays * (tireW + hubW) * (X === 'C' ? 2.5 : 1); // BeamNG's wheel mass (hub + tyre nodes)
       mass = Math.min(200, Math.max(4, mass));
       const nodeMass = mass / (2 * rays);
       const psi = num(p.pressurePSI, 30);
@@ -1367,12 +1378,13 @@
     const N = (id) => (id === '9999' ? '9999' : String(idx.get(String(id))));
 
     const title = (opts.title || `${veh.title || veh.model}${pc ? ' (' + pc.name + ')' : ''}`).replace(/[\r\n;]/g, ' ').trim() || 'Converted vehicle';
-    const titleTagged = `${title} [j2r ${CONVERTER_VERSION}]`;
-    const fileBase = (veh.model + (pc ? '_' + pc.name : '')).replace(/[^A-Za-z0-9_\-]+/g, '_');
+    const titleTagged = `${title} [j2r ${CONVERTER_VERSION}${X ? ' test ' + X : ''}]`;
+    const fileBase = (veh.model + (pc ? '_' + pc.name : '') + (X ? '_test' + X : '')).replace(/[^A-Za-z0-9_\-]+/g, '_');
     const matName = `jbeam2ror/${fileBase}/body`;
     const SAFE_DEFAULTS = 'set_beam_defaults 9000000, 12000, 1000000000, 1000000000';
     const L = [];
     L.push(titleTagged);
+    if (X) L.push(`; TROUBLESHOOTING BUILD ${X}: ${EXPERIMENTS[X]}`);
     L.push('');
     L.push(`; Converted from BeamNG.drive JBeam by jbeam2ror`);
     L.push(`; Source vehicle: ${veh.model}${pc ? ', configuration ' + pc.name : ''}`);
@@ -1471,9 +1483,11 @@
       L.push('engine');
       L.push(`${fmt(engine.shiftDown)}, ${fmt(engine.shiftUp)}, ${fmt(engine.torque)}, ${fmt(engine.finalDrive, 3)}, ${fmt(engine.reverse, 3)}, 1, ${engine.gears.map((g) => fmt(g, 3)).join(', ')}, -1`);
       L.push('');
-      L.push('; Traction control: stops wheelspin from shaking the light tyre nodes apart (toggle in RoR)');
-      L.push('TractionControl 2, 0.25, 1, 20, mode: ON');
-      L.push('');
+      if (X !== 'D') {
+        L.push('; Traction control: stops wheelspin from shaking the light tyre nodes apart (toggle in RoR)');
+        L.push('TractionControl 2, 0.25, 1, 20, mode: ON');
+        L.push('');
+      }
       L.push('engoption');
       L.push('; inertia, type, clutch force (both tuned so the engine/clutch/wheel loop is stable at RoR\'s 2000 Hz step)');
       L.push(`${fmt(engine.inertia, 4)}, ${engine.type}, ${engine.clutchForce}`);
@@ -1654,7 +1668,7 @@
     // Ground: lowest wheel bottom (or lowest node) sits 2 cm above y=0
     let ground = Infinity;
     for (let i = 0; i < n; i++) ground = Math.min(ground, pos[i * 3 + 1]);
-    ground -= 0.02;
+    ground -= 0.02 + (extra.dropHeight || 0);
     const dt = PHYSICS_DT, g = 9.81;
     const steps = Math.round((extra.seconds || 4) / dt);
     const probe = [];
@@ -1803,7 +1817,7 @@
           // RoR SHOCK1: past a bound, blend toward the hard values by the overshoot in metres
           const lo = sp.shock.sb * sp.L0, hi = sp.shock.lb * sp.L0;
           const x = diff > hi ? diff - hi : (diff < -lo ? -diff - lo : 0);
-          if (x > 0) { k += (sp.shock.hardK - k) * x; c += (sp.shock.hardD - c) * x; }
+          if (x > 0) { k += (sp.shock.hardK - k) * x; c += (sp.shock.hardD - c) * x; if (!(x <= (sp.maxX || 0))) { sp.maxX = x; sp.maxF = k * diff; } }
         }
         let f = k * diff + c * vr;
         // plastic deformation like BeamNG/RoR: past the threshold the rest length gives way
@@ -1899,7 +1913,8 @@
         return { wheel: wr.w.name, treadBottomAboveGround: +(lo - ground).toFixed(3), axleHeight: +(chassisLo - ground).toFixed(3) };
       });
     }
-    return { stable, broken: brokenLog, engine: extra.drive ? eng : undefined, contact, fastest, watched, probe, firstBlow, maxSpeedMid: +maxSpeedMid.toFixed(3), maxSpeedLate: +maxSpeedLate.toFixed(3), maxStrain: +maxStrain.toFixed(3), collapsedBeams: collapsed, hotNodes, seconds: +(steps * dt).toFixed(1) };
+    const overshoots = springs.filter((sp) => sp.shock && sp.maxX > 0).map((sp) => ({ a: ids[sp.i], b: ids[sp.j], x: sp.maxX, F: sp.maxF })).sort((p, q) => Math.abs(q.F) - Math.abs(p.F));
+    return { stable, overshoots, broken: brokenLog, engine: extra.drive ? eng : undefined, contact, fastest, watched, probe, firstBlow, maxSpeedMid: +maxSpeedMid.toFixed(3), maxSpeedLate: +maxSpeedLate.toFixed(3), maxStrain: +maxStrain.toFixed(3), collapsedBeams: collapsed, hotNodes, seconds: +(steps * dt).toFixed(1) };
   }
 
   /**
@@ -2025,7 +2040,7 @@
     }));
   }
 
-  const api = { version: CONVERTER_VERSION, _stabilizeModes: stabilizeModes, _simulateDrop: simulateDrop, parseJBeam, evalExpression, openZip, makeZip, loadLibrary, listVehicles, convert, buildModZip, filesToEntries, crc32 };
+  const api = { version: CONVERTER_VERSION, experiments: EXPERIMENTS, _stabilizeModes: stabilizeModes, _simulateDrop: simulateDrop, parseJBeam, evalExpression, openZip, makeZip, loadLibrary, listVehicles, convert, buildModZip, filesToEntries, crc32 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.J2R = api;
 })(typeof self !== 'undefined' ? self : this);
