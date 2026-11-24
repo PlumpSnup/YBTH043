@@ -7,8 +7,8 @@ const fs = require('fs');
 function validate(text) {
   const errors = [];
   const lines = text.split(/\r?\n/);
-  const minArgs = { nodes: 4, beams: 2, shocks: 7, hydros: 3, wheels: 14, cameras: 3, cinecam: 11, engine: 7, engoption: 1, torquecurve: 2, brakes: 1, globals: 2, minimass: 1, texcoords: 3, cab: 3, slidenodes: 3, fusedrag: 3 };
-  const nodeRefCols = { beams: [0, 1], shocks: [0, 1], hydros: [0, 1], wheels: [3, 4, 5, 8], cameras: [0, 1, 2], cinecam: [3, 4, 5, 6, 7, 8, 9, 10], texcoords: [0], cab: [0, 1, 2], fusedrag: [0, 1] };
+  const minArgs = { nodes: 4, beams: 2, shocks: 7, hydros: 3, wheels: 14, cameras: 3, cinecam: 11, engine: 7, engoption: 1, torquecurve: 2, brakes: 1, globals: 2, minimass: 1, texcoords: 3, cab: 3, slidenodes: 3, fusedrag: 3, flexbodies: 10 };
+  const nodeRefCols = { beams: [0, 1], shocks: [0, 1], hydros: [0, 1], wheels: [3, 4, 5, 8], cameras: [0, 1, 2], cinecam: [3, 4, 5, 6, 7, 8, 9, 10], texcoords: [0], cab: [0, 1, 2], fusedrag: [0, 1], flexbodies: [0, 1, 2] };
   const keywords = new Set([...Object.keys(minArgs), 'submesh', 'end', 'enable_advanced_deformation', 'set_beam_defaults']);
   let section = null, nodeCount = 0, sawTitle = false, ended = false;
   const texNodes = new Set();
@@ -21,6 +21,14 @@ function validate(text) {
     if (ended) { errors.push(`line ${ln + 1}: content after 'end'`); return; }
     const kw = line.split(/[\s,]+/)[0];
     if (kw === 'set_node_defaults') { const a2 = line.split(/[\s,]+/).filter(Boolean); if (a2.length < 2 || a2.slice(1).some((x) => isNaN(+x))) errors.push(`line ${ln + 1}: bad set_node_defaults`); return; }
+    if (kw.startsWith('forset')) {
+      // RoR quirk: anything odd (or a trailing separator) silently adds node 0
+      if (section !== 'flexbodies') errors.push(`line ${ln + 1}: forset outside flexbodies`);
+      const body = line.slice(6).replace(/^[\s:,]+/, '');
+      if (!/^\d+(-\d+)?(,\d+(-\d+)?)*$/.test(body)) errors.push(`line ${ln + 1}: bad forset "${body.slice(0, 40)}"`);
+      for (const r of body.split(',')) for (const x of r.split('-')) refs.push([ln + 1, x, false]);
+      return;
+    }
     if (/^tractioncontrol$/i.test(kw)) { if (!/^TractionControl\s+[\d.]+\s*,\s*[\d.]+/i.test(line)) errors.push(`line ${ln + 1}: bad TractionControl line`); return; }
     if (/^[a-z]/i.test(line) && keywords.has(kw)) {
       if (kw === 'set_beam_defaults') {
@@ -45,6 +53,7 @@ function validate(text) {
       if (args[5] !== undefined && !(+args[5] > 0)) errors.push(`line ${ln + 1}: node mass must be > 0`);
     }
     if (section === 'texcoords') texNodes.add(args[0]);
+    if (section === 'flexbodies' && !/\.mesh$/i.test(args[9] || '')) errors.push(`line ${ln + 1}: flexbody mesh should be a .mesh file`);
     if (section === 'slidenodes') {
       // node, rail nodes..., then options starting with a letter (S spring, B break, T tolerance ...)
       const nodeArgs = args.filter((x) => /^\d+$/.test(x));

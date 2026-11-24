@@ -1,6 +1,6 @@
 # jbeam2ror: BeamNG → Rigs of Rods physics converter
 
-Converts a BeamNG.drive car mod (JBeam) into a Rigs of Rods `.truck` mod that loads and drives with no hand-editing. It focuses on the **physics**. 3D models are not converted; the body is drawn flat from the collision triangles.
+Converts a BeamNG.drive car mod (JBeam) into a Rigs of Rods `.truck` mod that loads and drives with no hand-editing. It focuses on the **physics**, and also brings over the **3D model** (body, interior, engine bay) with its colour textures.
 
 ## Use it
 
@@ -25,7 +25,9 @@ node cli.js path/to/mod.zip --extra "path/to/BeamNG.drive/content/vehicles/commo
 | `|SUPPORT` beams | `s` beams |
 | steering `hydros` | `hydros`, with the direction and amount worked out from the steering-arm geometry |
 | other `hydros` | rigid beams |
-| `triangles` / `quadTriangles` | `submesh` / `cab` (collision + flat body) |
+| `triangles` / `quadTriangles` | `submesh` / `cab` (collision; hidden when the 3D model is included) |
+| `flexbodies` + `.dae` models | `flexbodies` + `forset`, one OGRE `.mesh` (v1.100) per part, placed with RoR's own FlexBody maths |
+| `*.materials.json` | OGRE `.material` (colour texture, paint colour, glass transparency, double-sided); `glowMap` lights use their "off" look |
 | `pressureWheels`, `hubWheels`… | `wheels` (radius, width, rays, mass, pressure-based stiffness, brakes) |
 | `powertrain` (engine torque curve, gearbox, differentials, `connectedWheel`) | `engine`, `engoption`, `torquecurve`, driven wheels |
 | `rails` + `slidenodes` (e.g. spring seats on struts) | `slidenodes` |
@@ -34,7 +36,7 @@ node cli.js path/to/mod.zip --extra "path/to/BeamNG.drive/content/vehicles/commo
 
 **No BeamNG install needed for most mods.** Tires and wheels that a mod borrows from the base game are rebuilt from their part names (`tire_F_175_70_13` = 175 mm wide, 70 % sidewall, 13-inch rim; base-game wheels reuse the mod's own wheel for the node layout). Lights, sounds and seats from the base game are skipped since they don't affect physics.
 
-Not converted: flexbody meshes, textures, lights, sounds, Lua controllers (ABS, ESC, electrics) and torsion bars (anti-roll bars).
+Not converted: wheel/rim meshes (RoR draws its own wheels for now), normal/roughness maps, `props` (steering wheel, gauge needles), lights, sounds, Lua controllers (ABS, ESC, electrics) and torsion bars (anti-roll bars).
 
 ## Why it shouldn't break
 

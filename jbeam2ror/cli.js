@@ -19,7 +19,8 @@ Options:
   --list                List vehicles and configurations, then exit
   --no-cab              Don't create the collision/body surface
   --show-beams          Draw the node/beam skeleton in RoR
-  --cab-collision       Make body panels solid (can make BeamNG cars float in RoR)`);
+  --cab-collision       Make body panels solid (can make BeamNG cars float in RoR)
+  --no-model            Physics only: leave out the 3D model and textures`);
 }
 
 async function openSource(p) {
@@ -55,6 +56,7 @@ async function openSource(p) {
     else if (a === '--no-cab') opts.cab = false;
     else if (a === '--show-beams') opts.visibleBeams = true;
     else if (a === '--cab-collision') opts.cabCollision = true;
+    else if (a === '--no-model') opts.noModel = true;
     else if (!input) input = a;
     else { console.error(`Unknown argument: ${a}`); process.exit(1); }
   }
@@ -67,6 +69,7 @@ async function openSource(p) {
     return;
   }
   const result = J2R.convert(lib, opts);
+  if (!opts.noModel) await J2R.addVisuals(lib, result, {}, (m) => console.log(m));
   const outDir = opts.out || '.';
   fs.mkdirSync(outDir, { recursive: true });
   const zipPath = path.join(outDir, `${result.fileBase}.zip`);
@@ -78,6 +81,7 @@ async function openSource(p) {
   console.log(`  engine: ${s.engine}`);
   console.log(`  physics self-test: ${s.selfTest}`);
   console.log(`  drive test: ${s.driveTest}`);
+  if (s.model) console.log(`  3D model: ${s.model}`);
   if (result.report.warnings.length) {
     console.log('\nNotes:');
     for (const w of result.report.warnings) console.log(`  - ${w}`);
