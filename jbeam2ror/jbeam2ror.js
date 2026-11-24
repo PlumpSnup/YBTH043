@@ -18,7 +18,7 @@
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v15';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v16';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -411,6 +411,25 @@
     return (c ^ 0xffffffff) >>> 0;
   }
 
+  async function deflateRaw(bytes) {
+    if (typeof CompressionStream !== 'undefined') {
+      const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+      return new Uint8Array(await new Response(stream).arrayBuffer());
+    }
+    return new Uint8Array(require('zlib').deflateRawSync(bytes, { level: 9 }));
+  }
+
+  /** Build a compressed (deflate) zip. files: [{path, data}] -> Promise<Uint8Array> */
+  async function makeZipCompressed(files) {
+    const enc = new TextEncoder();
+    const out = [];
+    for (const f of files) {
+      const raw = typeof f.data === 'string' ? enc.encode(f.data) : f.data;
+      out.push({ path: f.path, deflated: await deflateRaw(raw), rawLength: raw.length, crc: crc32(raw) });
+    }
+    return makeZip(out);
+  }
+
   /** Build an uncompressed (stored) zip. files: [{path, data: string|Uint8Array}] -> Uint8Array */
   function makeZip(files) {
     const enc = new TextEncoder();
@@ -419,18 +438,21 @@
     let offset = 0;
     for (const f of files) {
       const name = enc.encode(f.path);
-      const data = typeof f.data === 'string' ? enc.encode(f.data) : f.data;
-      const crc = crc32(data);
+      const raw = typeof f.data === 'string' ? enc.encode(f.data) : f.data;
+      const data = f.deflated || raw;
+      const method = f.deflated ? 8 : 0;
+      const usize = f.deflated ? f.rawLength : raw.length;
+      const crc = f.deflated ? f.crc : crc32(raw);
       const lh = new Uint8Array(30 + name.length);
       const lv = new DataView(lh.buffer);
       lv.setUint32(0, 0x04034b50, true);
       lv.setUint16(4, 20, true);
       lv.setUint16(6, 0x0800, true); // UTF-8 names
-      lv.setUint16(8, 0, true);
+      lv.setUint16(8, method, true);
       lv.setUint16(10, 0, true); lv.setUint16(12, 0x21, true);
       lv.setUint32(14, crc, true);
       lv.setUint32(18, data.length, true);
-      lv.setUint32(22, data.length, true);
+      lv.setUint32(22, usize, true);
       lv.setUint16(26, name.length, true);
       lh.set(name, 30);
       parts.push(lh, data);
@@ -439,11 +461,11 @@
       cv.setUint32(0, 0x02014b50, true);
       cv.setUint16(4, 20, true); cv.setUint16(6, 20, true);
       cv.setUint16(8, 0x0800, true);
-      cv.setUint16(10, 0, true);
+      cv.setUint16(10, method, true);
       cv.setUint16(12, 0, true); cv.setUint16(14, 0x21, true);
       cv.setUint32(16, crc, true);
       cv.setUint32(20, data.length, true);
-      cv.setUint32(24, data.length, true);
+      cv.setUint32(24, usize, true);
       cv.setUint16(28, name.length, true);
       cv.setUint32(42, offset, true);
       ch.set(name, 46);
@@ -1255,7 +1277,10 @@
     }
 
     // Brakes
-    const maxBrake = Math.max(0, ...wheels.map((w) => w.brakeTorque));
+    // RoR applies one brake torque to every braked wheel; use the average of BeamNG's per-wheel
+    // values so the total braking matches (the maximum made front-biased cars brake too hard).
+    const brakedW = wheels.filter((w) => w.braked && w.brakeTorque > 0);
+    const maxBrake = brakedW.length ? brakedW.reduce((s2, w) => s2 + w.brakeTorque, 0) / brakedW.length : 0;
     const maxPark = Math.max(0, ...wheels.map((w) => w.parkTorque));
 
     // -- stability: keep exact BeamNG masses unless the physics would explode ---
@@ -2109,7 +2134,7 @@
     }));
   }
 
-  const api = { version: CONVERTER_VERSION, experiments: EXPERIMENTS, pack: PACK, _stabilizeModes: stabilizeModes, _simulateDrop: simulateDrop, parseJBeam, evalExpression, openZip, makeZip, loadLibrary, listVehicles, convert, buildModZip, filesToEntries, crc32 };
+  const api = { makeZipCompressed, version: CONVERTER_VERSION, experiments: EXPERIMENTS, pack: PACK, _stabilizeModes: stabilizeModes, _simulateDrop: simulateDrop, parseJBeam, evalExpression, openZip, makeZip, loadLibrary, listVehicles, convert, buildModZip, filesToEntries, crc32 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.J2R = api;
 })(typeof self !== 'undefined' ? self : this);

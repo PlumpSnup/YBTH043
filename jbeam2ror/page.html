@@ -131,7 +131,7 @@ footer p { margin: 0 0 6px; }
               <label class="btn" for="modDir">Choose folder<input type="file" id="modDir" webkitdirectory multiple></label>
             </div>
             <span class="picked" id="modName"></span>
-            <div class="row" id="physRow" hidden><button type="button" id="physBtn">Save physics files only</button><button type="button" id="listBtn">Save file list</button><button type="button" id="modelBtn">Save 3D model report</button><span class="status" id="physStatus"></span></div>
+            <div class="row" id="physRow" hidden><button type="button" id="physBtn">Save physics files only</button><button type="button" id="listBtn">Save file list</button><button type="button" id="modelBtn">Save 3D model report</button><button type="button" id="modelFilesBtn">Save 3D model files</button><span class="status" id="physStatus"></span></div>
           </div>
         </div>
       </div>
@@ -425,6 +425,23 @@ footer p { margin: 0 0 6px; }
       msg.textContent = '';
       await saveFile(`${base}_3d_report.zip`, bytes, msg, `${(bytes.length / 1048576).toFixed(2)} MB, ${meshes.length} model files found`);
     } catch (err) { msg.textContent = `Couldn't build the report: ${err.message}`; }
+  });
+
+  // The mod's 3D model files (.dae/.cdae/.dts) and material definitions, compressed and
+  // without textures: small enough to share so the model conversion can be built and checked.
+  $('modelFilesBtn').addEventListener('click', async () => {
+    const msg = $('physStatus');
+    try {
+      const wanted = state.mod.entries.filter((e) => /\.(dae|cdae|dts)$/i.test(e.path) || /materials?\.(json|cs)$/i.test(e.path));
+      if (!wanted.length) { msg.textContent = 'No 3D model files found in this mod.'; return; }
+      const files = [];
+      for (let i = 0; i < wanted.length; i++) { msg.textContent = `Reading ${i + 1} of ${wanted.length}…`; files.push({ path: wanted[i].path, data: await wanted[i].read() }); }
+      msg.textContent = 'Compressing…';
+      const bytes = await J2R.makeZipCompressed(files);
+      const base = String(state.mod.name || 'mod').replace(/\.zip$/i, '').replace(/[^A-Za-z0-9_\-]+/g, '_');
+      msg.textContent = '';
+      await saveFile(`${base}_3d_models.zip`, bytes, msg, `${wanted.length} files, ${(bytes.length / 1048576).toFixed(1)} MB`);
+    } catch (err) { msg.textContent = `Couldn't save the model files: ${err.message}`; }
   });
 
   async function saveFile(filename, bytes, msg, savedNote) {
