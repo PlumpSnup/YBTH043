@@ -20,7 +20,7 @@
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v17';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v18';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -1517,8 +1517,12 @@
     for (const b of beams) { const g = groupKey(b); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(b); }
     L.push('beams');
     const vis = opts.visibleBeams ? '' : 'i';
+    // The trailing "-1, tracks/beam, 0" (default diameter and material, plastic coefficient 0)
+    // matters: without a plastic coefficient RoR silently raises every deform threshold
+    // below 100 kN to 100 kN ("beam creak"), which makes BeamNG's soft panels (3-20 kN) solid.
+    L.push('; each set_beam_defaults: spring, damping, deform, break, diameter, material, plastic coef');
     for (const [g, list] of groups) {
-      L.push(`set_beam_defaults ${g}`);
+      L.push(`set_beam_defaults ${g}, -1, tracks/beam, 0`);
       for (const b of list) L.push(`${N(b.a)}, ${N(b.b)}${b.support ? ', s' + vis : (vis ? ', ' + vis : '')}`);
     }
     L.push('');
@@ -2559,13 +2563,16 @@
     const usedTexNames = new Set();
     const missingMats = new Set(), missingTex = new Set();
     const paint = plan.paint || [0.6, 0.6, 0.62];
-    function texName(entry) {
-      if (textures.has(entry)) return textures.get(entry);
-      let n = entry.path.split('/').pop();
+    // texture jobs: key -> {entry, name, bake}
+    function texName(entry, bake) {
+      const key = entry.path + (bake ? '|' + bake.mask.path + '|' + bake.paint.join(',') : '');
+      if (textures.has(key)) return textures.get(key).name;
+      const file = entry.path.split('/').pop();
+      let n = bake ? file.replace(/(\.[^.]+)$/, '_painted$1') : file;
       let k = 2;
-      while (usedTexNames.has(n.toLowerCase())) n = `${k++}_${entry.path.split('/').pop()}`;
+      while (usedTexNames.has(n.toLowerCase())) n = `${k++}_${n}`;
       usedTexNames.add(n.toLowerCase());
-      textures.set(entry, n);
+      textures.set(key, { entry, name: n, bake });
       return n;
     }
     const c3 = (a) => a.map((x) => (+x).toFixed(3)).join(' ');
@@ -2583,9 +2590,19 @@
         const r = s.baseColorMap || s.colorMap || s.diffuseMap;
         if (r) { tex = findTexture(lib, r, found && found.file); if (!tex) missingTex.add(r); break; }
       }
+      const hasFactor = Array.isArray(s0.baseColorFactor) || Array.isArray(s0.diffuseColor);
       let color = Array.isArray(s0.baseColorFactor) ? s0.baseColorFactor.slice(0, 3).map(Number) : Array.isArray(s0.diffuseColor) ? s0.diffuseColor.slice(0, 3).map(Number) : [1, 1, 1];
-      if (!tex && !def) color = [0.55, 0.55, 0.57];
-      if (painted) color = color.map((c, q) => c * paint[q]);
+      if (!tex && !hasFactor) color = [0.55, 0.55, 0.57]; // texture from the base game: plain grey, not white
+      // Paint: BeamNG lays the paint over the colour texture through a mask (the paint
+      // stage's opacityMap). With the mask we bake the paint into the texture so trim and
+      // chrome keep their colour; without it the whole material is tinted.
+      let bake = null;
+      if (painted && tex && /\.dds$/i.test(tex.path)) {
+        const ps = stages.find((st) => st.instanceDiffuse === true);
+        const maskEntry = ps && ps.opacityMap && !(+ps.opacityMapUV > 0) ? findTexture(lib, ps.opacityMap, found && found.file) : null;
+        if (maskEntry && /\.dds$/i.test(maskEntry.path)) bake = { mask: maskEntry, paint };
+      }
+      if (painted && !bake) color = color.map((c, q) => c * paint[q]);
       let alpha = 1;
       if (typeof s0.opacityFactor === 'number') alpha = s0.opacityFactor;
       else if (Array.isArray(s0.baseColorFactor) && s0.baseColorFactor.length > 3) alpha = +s0.baseColorFactor[3];
@@ -2605,7 +2622,7 @@
       if (translucent) { L2.push('\t\t\tscene_blend alpha_blend'); L2.push('\t\t\tdepth_write off'); }
       else if (def && (def.alphaTest || +def.alphaRef > 0)) L2.push(`\t\t\talpha_rejection greater_equal ${Math.max(1, Math.min(255, Math.round(+def.alphaRef || 128)))}`);
       if (tex) {
-        L2.push('\t\t\ttexture_unit', '\t\t\t{', `\t\t\t\ttexture ${texName(tex)}`, '\t\t\t\ttex_address_mode wrap', '\t\t\t\tfiltering anisotropic', '\t\t\t\tmax_anisotropy 4', '\t\t\t}');
+        L2.push('\t\t\ttexture_unit', '\t\t\t{', `\t\t\t\ttexture ${texName(tex, bake)}`, '\t\t\t\ttex_address_mode wrap', '\t\t\t\tfiltering anisotropic', '\t\t\t\tmax_anisotropy 4', '\t\t\t}');
       }
       L2.push('\t\t}', '\t}', '}', '');
       ogreMats.set(bngName, { name, text: L2.join('\n') });
@@ -2662,6 +2679,20 @@
         forset = forset.concat(extra.slice(0, 6 - forset.length));
         if (fb.nodes.length === 0) note(`${fb.mesh}: its node group (${fb.groups.join(', ') || 'none'}) has no nodes here; attached to the nearest body nodes.`);
       }
+      // RoR binds each vertex to its nearest node, the next nearest, and a third one at
+      // more than 45 degrees from that line ("VY node not found" otherwise, e.g. a sway bar
+      // whose nodes are all in a row). If some node has no such partner, add body nodes.
+      const lacksY = (set) => set.some((a) => {
+        const others = set.filter((n) => n !== a);
+        if (others.length < 2) return true;
+        const b = others.reduce((p, q) => (dist2(byNum[q].pos, byNum[a].pos) < dist2(byNum[p].pos, byNum[a].pos) ? q : p));
+        const vx = norm(sub(byNum[b].pos, byNum[a].pos));
+        return !others.some((c) => c !== b && Math.abs(dot(vx, norm(sub(byNum[c].pos, byNum[a].pos)))) <= Math.SQRT1_2);
+      });
+      if (lacksY(forset)) {
+        const extra = plan.bodyNodes.filter((n) => !forset.includes(n)).sort((a, b) => dist2(byNum[a].pos, centroid) - dist2(byNum[b].pos, centroid));
+        for (const n of extra) { forset.push(n); if (!lacksY(forset)) break; if (forset.length > fb.nodes.length + 12) break; }
+      }
       // Placement frame (ref, x and y nodes)
       const P = (n) => byNum[n].pos;
       const ref = forset.reduce((a, b) => (dist2(P(b), centroid) < dist2(P(a), centroid) ? b : a));
@@ -2708,16 +2739,299 @@
     result.files.find((f) => /\.truck$/.test(f.path)).data = result.truck;
     result.files.push({ path: `${prefix}-model.material`, data: [...ogreMats.values()].map((m) => m.text).join('\n') });
     for (const m of meshFiles) result.files.push(m);
-    log(`Copying ${textures.size} textures…`);
-    let texBytes = 0;
-    for (const [entry, name] of textures) {
-      try { const data = await entry.read(); texBytes += data.length; result.files.push({ path: name, data, binary: true }); } catch (err) { note(`Texture ${entry.path} could not be read: ${err.message}`); }
+    // BeamNG's BC7 textures show black on RoR's Direct3D 9 renderer: re-encode them as DXT
+    let texBytes = 0, converted = 0, k2 = 0;
+    for (const { entry, name, bake } of textures.values()) {
+      log(`Converting texture ${++k2} of ${textures.size}: ${entry.path.split('/').pop()}…`);
+      await new Promise((res) => setTimeout(res, 0));
+      let data;
+      try { data = await entry.read(); } catch (err) { note(`Texture ${entry.path} could not be read: ${err.message}`); continue; }
+      try {
+        const b2 = bake ? { mask: await bake.mask.read(), paint: bake.paint } : null;
+        const out = convertTexture(data, entry.path, b2, opts.maxTextureSize || 2048);
+        if (!out.kept) converted++;
+        data = out.data;
+      } catch (err) { note(`Texture ${entry.path} was copied unchanged (${err.message}); it may show black in RoR.`); }
+      texBytes += data.length;
+      result.files.push({ path: name, data, binary: true });
     }
+    if (converted) note(`${converted} texture(s) were re-encoded to DXT so RoR's Direct3D 9 / OpenGL renderers can show them.`);
     const stats = { flexbodies: lines.length / 3, vertices: totalVerts, triangles: Math.round(totalTris), materials: ogreMats.size, textures: textures.size, textureMB: +(texBytes / 1048576).toFixed(1) };
     result.report.stats.model = `${stats.flexbodies} parts, ${stats.triangles} triangles, ${stats.materials} materials, ${stats.textures} textures (${stats.textureMB} MB)`;
     result.report.model = stats;
     for (const n of notes) result.report.warnings.push(`3D model: ${n}`);
     return Object.assign({ added: stats.flexbodies, notes }, stats);
+  }
+
+  // ===========================================================================
+  // Textures. BeamNG ships BC7 (DX10-header) DDS files; RoR on Direct3D 9 (and old
+  // OpenGL) can't use those, and the texture comes out black. Every DDS that isn't
+  // plain DXT1/DXT5 is decoded here and re-encoded as DXT1/DXT5 with mipmaps.
+  // ===========================================================================
+  // BC7 partition tables (from bcdec by iOrange, MIT/Unlicense): digit = subset, letter = subset at its fix-up (anchor) texel
+  const BC7_P2 = 'a01100110011001ba00100010001000ba11101110111011ba00100110011011ba00000010001001ba01101110111111ba00100110111111ba00000010011011ba00000000001001ba01101111111111ba00000010111111ba00000000001011ba00101111111111ba00000001111111ba00011111111111ba00000000000111ba00010001110111ba1b1000100000000a0000000b0001110a1b1001100010000a0b1000100000000a0001000b1001110a0000000b0001100a11100110011000ba0b1000100010000a0001000b0001100a1b0011001100110a0b1011001101100a0010111b1101000a0001111b1110000a1b1000110001110a0b1100110011100a10101010101010ba00011110000111ba10110b001011010a0110011b1001100a0b1110000111100a1010101b0101010a11010010110100ba10110101010010ba1b1001111001110a0010011b1001000a0b1001001001100a0b1101111011100a1b0100110010110a01111001100001ba11001101001100ba00001b001100000a10011b001000000a0b0011100100000a00000b001110010a0000100b1100100a11011001001001ba01101101100100ba1b0001110011100a0b1100111000110a11011001100100ba11000110011100ba11111101000000ba00110001110011ba00011110011001ba0b1001111110000a0b0001011101110a10001000111011b';
+  const BC7_P3 = 'a01b00110221222ca00b0011c2112221a0002001c211221ba22c00220011011ba0000000b122112ca01b00110022002ca02c00221111111ba0110011c211221ba0000000b111222ca0001111b111222ca00011b12222222ca01200b20012001ca11201b20112011ca1220b220122012ca01b01121122122ca01b2001c2002220a00b00110112112ca11b0011c0012200a0001122b122112ca02c00220022111ba11b01110222022ca00b0001c2212221a00000b10122012ca0001100c2b02210a12c0b2200110000a0120012b122222ca11012c1b2210110a00001b012c11221a0221102b102002ca1100b102002222ca011012201c2001ba0002000c211222ba0000002b122122ca22c00220012001ba01b00120022022ca1200b2001c00120a00011b122c20000a1201201c0b20120a1202012bc010120a011220011c2001ba01111c22200001ba10b01012222222ca0000000c121212ba0221b220022112ca02c00110022001ba22012c10220122ba10122c22222010ba0002121c121212ba10b01010101222ca22c01110222011ba0021b120002111ca0002b122112211ca2220b110111022ca0021112b112000ca1100b100110222ca000000021b2211ca1100b102222222ca022001100b1002ca0221122b122002ca000000000002b1ca00c00010002000ba22212220222b22ca10b22222222222ca11b2011c2012220';
+  const DXGI = { 71: 'BC1', 72: 'BC1', 74: 'BC2', 75: 'BC2', 77: 'BC3', 78: 'BC3', 80: 'BC4', 81: 'BC4', 83: 'BC5', 84: 'BC5', 98: 'BC7', 99: 'BC7', 97: 'BC7', 28: 'RGBA8', 29: 'RGBA8', 27: 'RGBA8', 87: 'BGRA8', 91: 'BGRA8', 88: 'BGRX8', 93: 'BGRX8', 61: 'R8' };
+  const BLOCK = { BC1: 8, BC4: 8, BC2: 16, BC3: 16, BC5: 16, BC7: 16 };
+  const PIXEL = { RGBA8: 4, BGRA8: 4, BGRX8: 4, BGR8: 3, R8: 1, L8: 1 };
+
+  function parseDDS(bytes) {
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (bytes.length < 128 || dv.getUint32(0, true) !== 0x20534444) throw new Error('not a DDS file');
+    const height = dv.getUint32(12, true), width = dv.getUint32(16, true);
+    const mips = Math.max(1, dv.getUint32(28, true) || 1);
+    const pfFlags = dv.getUint32(80, true);
+    const four = String.fromCharCode(bytes[84], bytes[85], bytes[86], bytes[87]);
+    let format = null, off = 128, legacy = true;
+    if (pfFlags & 4) {
+      if (four === 'DX10') { format = DXGI[dv.getUint32(128, true)] || null; off = 148; legacy = false; if (dv.getUint32(140, true) > 1) throw new Error('texture arrays are not supported'); }
+      else format = { DXT1: 'BC1', DXT2: 'BC2', DXT3: 'BC2', DXT4: 'BC3', DXT5: 'BC3', ATI1: 'BC4', BC4U: 'BC4', ATI2: 'BC5', BC5U: 'BC5' }[four] || null;
+    } else if (pfFlags & 0x40) {
+      const bits = dv.getUint32(88, true), rMask = dv.getUint32(92, true);
+      format = bits === 32 ? (rMask === 0xff ? 'RGBA8' : ((pfFlags & 1) ? 'BGRA8' : 'BGRX8')) : bits === 24 ? 'BGR8' : null;
+    } else if (pfFlags & 0x20000 || pfFlags & 2) format = 'L8';
+    if (!format) throw new Error(`unsupported DDS format ${four}`);
+    return { width, height, mips, format, off, legacy, bytes };
+  }
+  function ddsLevelSize(fmt, w, h) {
+    return BLOCK[fmt] ? Math.max(1, Math.ceil(w / 4)) * Math.max(1, Math.ceil(h / 4)) * BLOCK[fmt] : w * h * PIXEL[fmt];
+  }
+  /** Decode one mip level to RGBA8. */
+  function decodeDDS(dds, level) {
+    let w = dds.width, h = dds.height, at = dds.off;
+    for (let l = 0; l < level; l++) { at += ddsLevelSize(dds.format, w, h); w = Math.max(1, w >> 1); h = Math.max(1, h >> 1); }
+    const src = dds.bytes, out = new Uint8Array(w * h * 4), f = dds.format;
+    if (at + ddsLevelSize(f, w, h) > src.length) throw new Error('DDS file is truncated');
+    if (PIXEL[f]) {
+      const ps = PIXEL[f];
+      for (let i = 0; i < w * h; i++) {
+        const s = at + i * ps, o = i * 4;
+        if (f === 'RGBA8') { out[o] = src[s]; out[o + 1] = src[s + 1]; out[o + 2] = src[s + 2]; out[o + 3] = src[s + 3]; }
+        else if (f === 'BGRA8' || f === 'BGRX8') { out[o] = src[s + 2]; out[o + 1] = src[s + 1]; out[o + 2] = src[s]; out[o + 3] = f === 'BGRA8' ? src[s + 3] : 255; }
+        else if (f === 'BGR8') { out[o] = src[s + 2]; out[o + 1] = src[s + 1]; out[o + 2] = src[s]; out[o + 3] = 255; }
+        else { out[o] = out[o + 1] = out[o + 2] = src[s]; out[o + 3] = 255; }
+      }
+      return { w, h, rgba: out };
+    }
+    const bw = Math.max(1, Math.ceil(w / 4)), bh = Math.max(1, Math.ceil(h / 4)), bs = BLOCK[f];
+    const px = new Uint8Array(64);
+    for (let by = 0; by < bh; by++) for (let bx = 0; bx < bw; bx++) {
+      const b = at + (by * bw + bx) * bs;
+      if (f === 'BC1') colorBlock(src, b, px, true);
+      else if (f === 'BC2') { colorBlock(src, b + 8, px, false); for (let i = 0; i < 16; i++) px[i * 4 + 3] = ((src[b + (i >> 1)] >> ((i & 1) * 4)) & 15) * 17; }
+      else if (f === 'BC3') { colorBlock(src, b + 8, px, false); alphaBlock(src, b, px, 3); }
+      else if (f === 'BC4') { alphaBlock(src, b, px, 0); for (let i = 0; i < 16; i++) { px[i * 4 + 1] = px[i * 4 + 2] = px[i * 4]; px[i * 4 + 3] = 255; } }
+      else if (f === 'BC5') { alphaBlock(src, b, px, 0); alphaBlock(src, b + 8, px, 1); for (let i = 0; i < 16; i++) { px[i * 4 + 2] = 0; px[i * 4 + 3] = 255; } }
+      else bc7Block(src, b, px);
+      for (let y = 0; y < 4; y++) {
+        const yy = by * 4 + y; if (yy >= h) break;
+        for (let x = 0; x < 4; x++) {
+          const xx = bx * 4 + x; if (xx >= w) break;
+          const o = (yy * w + xx) * 4, s = (y * 4 + x) * 4;
+          out[o] = px[s]; out[o + 1] = px[s + 1]; out[o + 2] = px[s + 2]; out[o + 3] = px[s + 3];
+        }
+      }
+    }
+    return { w, h, rgba: out };
+  }
+  function colorBlock(src, b, px, allowAlpha) {
+    const c0 = src[b] | (src[b + 1] << 8), c1 = src[b + 2] | (src[b + 3] << 8);
+    const pal = new Array(16);
+    const rgb = (c) => [((c >> 11) & 31) * 255 / 31, ((c >> 5) & 63) * 255 / 63, (c & 31) * 255 / 31];
+    const a = rgb(c0), bb = rgb(c1);
+    const p = [[...a, 255], [...bb, 255]];
+    if (c0 > c1 || !allowAlpha) { p.push(a.map((v, i) => (2 * v + bb[i]) / 3).concat(255), a.map((v, i) => (v + 2 * bb[i]) / 3).concat(255)); }
+    else { p.push(a.map((v, i) => (v + bb[i]) / 2).concat(255), [0, 0, 0, 0]); }
+    void pal;
+    const bits = src[b + 4] | (src[b + 5] << 8) | (src[b + 6] << 16) | (src[b + 7] << 24);
+    for (let i = 0; i < 16; i++) { const c = p[(bits >>> (i * 2)) & 3]; for (let k = 0; k < 4; k++) px[i * 4 + k] = Math.round(c[k]); }
+  }
+  function alphaBlock(src, b, px, ch) {
+    const a0 = src[b], a1 = src[b + 1];
+    const p = [a0, a1];
+    if (a0 > a1) for (let i = 1; i < 7; i++) p.push(((7 - i) * a0 + i * a1) / 7);
+    else { for (let i = 1; i < 5; i++) p.push(((5 - i) * a0 + i * a1) / 5); p.push(0, 255); }
+    let lo = src[b + 2] | (src[b + 3] << 8) | (src[b + 4] << 16), hi = src[b + 5] | (src[b + 6] << 8) | (src[b + 7] << 16);
+    for (let i = 0; i < 16; i++) {
+      const idx = i < 8 ? (lo >> (i * 3)) & 7 : (hi >> ((i - 8) * 3)) & 7;
+      px[i * 4 + ch] = Math.round(p[idx]);
+    }
+  }
+  const W2 = [0, 21, 43, 64], W3 = [0, 9, 18, 27, 37, 46, 55, 64], W4 = [0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64];
+  // Port of bcdec_bc7 (bcdec by iOrange, MIT/Unlicense)
+  function bc7Block(src, b, px) {
+    let pos = 0;
+    const bits = (n) => { let v = 0; for (let k = 0; k < n; k++, pos++) v |= ((src[b + (pos >> 3)] >> (pos & 7)) & 1) << k; return v; };
+    let mode = 0;
+    while (mode < 8 && bits(1) === 0) mode++;
+    if (mode >= 8) { px.fill(0); return; }
+    const colBits = [4, 6, 5, 7, 5, 7, 7, 5][mode], alphaBits = [0, 0, 0, 0, 6, 8, 7, 5][mode];
+    const hasP = (0b11001011 >> mode) & 1;
+    let partition = 0, nParts = 1, rotation = 0, isel = 0;
+    if (mode === 0 || mode === 1 || mode === 2 || mode === 3 || mode === 7) { nParts = (mode === 0 || mode === 2) ? 3 : 2; partition = bits(mode === 0 ? 4 : 6); }
+    const nE = nParts * 2;
+    if (mode === 4 || mode === 5) { rotation = bits(2); if (mode === 4) isel = bits(1); }
+    const ep = [];
+    for (let j = 0; j < nE; j++) ep.push([0, 0, 0, 0]);
+    for (let i = 0; i < 3; i++) for (let j = 0; j < nE; j++) ep[j][i] = bits(colBits);
+    if (alphaBits) for (let j = 0; j < nE; j++) ep[j][3] = bits(alphaBits);
+    if (mode === 0 || mode === 1 || mode === 3 || mode === 6 || mode === 7) {
+      for (const e of ep) for (let k = 0; k < 4; k++) e[k] <<= 1;
+      if (mode === 1) { const i = bits(1), j = bits(1); for (let k = 0; k < 3; k++) { ep[0][k] |= i; ep[1][k] |= i; ep[2][k] |= j; ep[3][k] |= j; } }
+      else if (hasP) for (const e of ep) { const j = bits(1); for (let k = 0; k < 4; k++) e[k] |= j; }
+    }
+    for (const e of ep) {
+      let j = colBits + hasP;
+      for (let k = 0; k < 3; k++) { e[k] = (e[k] << (8 - j)) & 255; e[k] = e[k] | (e[k] >> j); }
+      j = alphaBits + hasP;
+      e[3] = (e[3] << (8 - j)) & 255; e[3] = e[3] | (e[3] >> j);
+    }
+    if (!alphaBits) for (const e of ep) e[3] = 255;
+    const ib = (mode === 0 || mode === 1) ? 3 : (mode === 6 ? 4 : 2);
+    const ib2 = mode === 4 ? 3 : (mode === 5 ? 2 : 0);
+    const w1 = ib === 2 ? W2 : ib === 3 ? W3 : W4, w2 = ib2 === 2 ? W2 : W3;
+    const table = nParts === 2 ? BC7_P2 : nParts === 3 ? BC7_P3 : null;
+    const subset = new Array(16), idx = new Array(16);
+    for (let i = 0; i < 16; i++) {
+      let s, anchor;
+      if (!table) { s = 0; anchor = i === 0; }
+      else { const ch = table[partition * 16 + i]; anchor = ch >= 'a'; s = anchor ? ch.charCodeAt(0) - 97 : +ch; }
+      subset[i] = s;
+      idx[i] = bits(anchor ? ib - 1 : ib);
+    }
+    const lerp = (e0, e1, w, i) => ((64 - w[i]) * e0 + w[i] * e1 + 32) >> 6;
+    for (let i = 0; i < 16; i++) {
+      const e0 = ep[subset[i] * 2], e1 = ep[subset[i] * 2 + 1];
+      let r, g, bl, a;
+      if (!ib2) { r = lerp(e0[0], e1[0], w1, idx[i]); g = lerp(e0[1], e1[1], w1, idx[i]); bl = lerp(e0[2], e1[2], w1, idx[i]); a = lerp(e0[3], e1[3], w1, idx[i]); }
+      else {
+        const i2 = bits(i ? ib2 : ib2 - 1);
+        if (!isel) { r = lerp(e0[0], e1[0], w1, idx[i]); g = lerp(e0[1], e1[1], w1, idx[i]); bl = lerp(e0[2], e1[2], w1, idx[i]); a = lerp(e0[3], e1[3], w2, i2); }
+        else { r = lerp(e0[0], e1[0], w2, i2); g = lerp(e0[1], e1[1], w2, i2); bl = lerp(e0[2], e1[2], w2, i2); a = lerp(e0[3], e1[3], w1, idx[i]); }
+      }
+      if (rotation === 1) [a, r] = [r, a]; else if (rotation === 2) [a, g] = [g, a]; else if (rotation === 3) [a, bl] = [bl, a];
+      px[i * 4] = r; px[i * 4 + 1] = g; px[i * 4 + 2] = bl; px[i * 4 + 3] = a;
+    }
+  }
+
+  /** Halve an RGBA image (box filter). */
+  function halve(img) {
+    const w = Math.max(1, img.w >> 1), h = Math.max(1, img.h >> 1), out = new Uint8Array(w * h * 4);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) for (let c = 0; c < 4; c++) {
+      let s = 0, n = 0;
+      for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) { const yy = Math.min(img.h - 1, y * 2 + dy), xx = Math.min(img.w - 1, x * 2 + dx); s += img.rgba[(yy * img.w + xx) * 4 + c]; n++; }
+      out[(y * w + x) * 4 + c] = (s / n + 0.5) | 0;
+    }
+    return { w, h, rgba: out };
+  }
+
+  /** Encode RGBA to a DXT1 (opaque) or DXT5 DDS with a full mip chain. */
+  function encodeDDS(img) {
+    let alpha = false;
+    for (let i = 3; i < img.rgba.length; i += 4) if (img.rgba[i] < 250) { alpha = true; break; }
+    const levels = [img];
+    while (levels[levels.length - 1].w > 1 || levels[levels.length - 1].h > 1) levels.push(halve(levels[levels.length - 1]));
+    const bs = alpha ? 16 : 8;
+    const sizes = levels.map((l) => Math.max(1, Math.ceil(l.w / 4)) * Math.max(1, Math.ceil(l.h / 4)) * bs);
+    const out = new Uint8Array(128 + sizes.reduce((a, b) => a + b, 0));
+    const dv = new DataView(out.buffer);
+    dv.setUint32(0, 0x20534444, true); dv.setUint32(4, 124, true);
+    dv.setUint32(8, 0x1 | 0x2 | 0x4 | 0x1000 | 0x20000 | 0x80000, true);
+    dv.setUint32(12, img.h, true); dv.setUint32(16, img.w, true); dv.setUint32(20, sizes[0], true);
+    dv.setUint32(28, levels.length, true);
+    dv.setUint32(76, 32, true); dv.setUint32(80, 4, true);
+    out.set([68, 88, 84, alpha ? 53 : 49], 84); // DXT5 / DXT1
+    dv.setUint32(108, 0x1000 | 0x400000 | 0x8, true);
+    let at = 128;
+    const blk = new Uint8Array(64);
+    for (const l of levels) {
+      const bw = Math.max(1, Math.ceil(l.w / 4)), bh = Math.max(1, Math.ceil(l.h / 4));
+      for (let by = 0; by < bh; by++) for (let bx = 0; bx < bw; bx++) {
+        for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) {
+          const yy = Math.min(l.h - 1, by * 4 + y), xx = Math.min(l.w - 1, bx * 4 + x), s = (yy * l.w + xx) * 4, o = (y * 4 + x) * 4;
+          blk[o] = l.rgba[s]; blk[o + 1] = l.rgba[s + 1]; blk[o + 2] = l.rgba[s + 2]; blk[o + 3] = l.rgba[s + 3];
+        }
+        if (alpha) { encodeAlpha(blk, out, at); at += 8; }
+        encodeColor(blk, out, at); at += 8;
+      }
+    }
+    return out;
+  }
+  function encodeColor(blk, out, at) {
+    // endpoints: extremes along the main colour axis
+    let mr = 0, mg = 0, mb = 0;
+    for (let i = 0; i < 16; i++) { mr += blk[i * 4]; mg += blk[i * 4 + 1]; mb += blk[i * 4 + 2]; }
+    mr /= 16; mg /= 16; mb /= 16;
+    let cxx = 0, cxy = 0, cxz = 0, cyy = 0, cyz = 0, czz = 0;
+    for (let i = 0; i < 16; i++) { const r = blk[i * 4] - mr, g = blk[i * 4 + 1] - mg, b = blk[i * 4 + 2] - mb; cxx += r * r; cxy += r * g; cxz += r * b; cyy += g * g; cyz += g * b; czz += b * b; }
+    let ax = [1, 1, 1];
+    for (let k = 0; k < 6; k++) { const n = [cxx * ax[0] + cxy * ax[1] + cxz * ax[2], cxy * ax[0] + cyy * ax[1] + cyz * ax[2], cxz * ax[0] + cyz * ax[1] + czz * ax[2]]; const l = Math.hypot(...n); if (l < 1e-9) break; ax = n.map((v) => v / l); }
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < 16; i++) { const t = (blk[i * 4] - mr) * ax[0] + (blk[i * 4 + 1] - mg) * ax[1] + (blk[i * 4 + 2] - mb) * ax[2]; if (t < lo) lo = t; if (t > hi) hi = t; }
+    const to565 = (t) => { const r = Math.max(0, Math.min(255, mr + ax[0] * t)), g = Math.max(0, Math.min(255, mg + ax[1] * t)), b = Math.max(0, Math.min(255, mb + ax[2] * t)); return (Math.round(r * 31 / 255) << 11) | (Math.round(g * 63 / 255) << 5) | Math.round(b * 31 / 255); };
+    let c0 = to565(hi), c1 = to565(lo);
+    if (c0 < c1) [c0, c1] = [c1, c0];
+    const rgb = (c) => [((c >> 11) & 31) * 255 / 31, ((c >> 5) & 63) * 255 / 63, (c & 31) * 255 / 31];
+    const a = rgb(c0), b = rgb(c1);
+    const pal = c0 === c1 ? [a] : [a, b, a.map((v, i) => (2 * v + b[i]) / 3), a.map((v, i) => (v + 2 * b[i]) / 3)];
+    let bits = 0;
+    for (let i = 0; i < 16; i++) {
+      let best = 0, bd = Infinity;
+      for (let p = 0; p < pal.length; p++) { const d = (blk[i * 4] - pal[p][0]) ** 2 + (blk[i * 4 + 1] - pal[p][1]) ** 2 + (blk[i * 4 + 2] - pal[p][2]) ** 2; if (d < bd) { bd = d; best = p; } }
+      bits |= best << (i * 2);
+    }
+    out[at] = c0 & 255; out[at + 1] = c0 >> 8; out[at + 2] = c1 & 255; out[at + 3] = c1 >> 8;
+    out[at + 4] = bits & 255; out[at + 5] = (bits >>> 8) & 255; out[at + 6] = (bits >>> 16) & 255; out[at + 7] = (bits >>> 24) & 255;
+  }
+  function encodeAlpha(blk, out, at) {
+    let lo = 255, hi = 0;
+    for (let i = 0; i < 16; i++) { const v = blk[i * 4 + 3]; if (v < lo) lo = v; if (v > hi) hi = v; }
+    out[at] = hi; out[at + 1] = lo;
+    const pal = [hi, lo];
+    if (hi > lo) for (let i = 1; i < 7; i++) pal.push(((7 - i) * hi + i * lo) / 7);
+    let bitsLo = 0, bitsHi = 0;
+    for (let i = 0; i < 16; i++) {
+      let best = 0, bd = Infinity;
+      for (let p = 0; p < pal.length; p++) { const d = Math.abs(blk[i * 4 + 3] - pal[p]); if (d < bd) { bd = d; best = p; } }
+      if (i < 8) bitsLo |= best << (i * 3); else bitsHi |= best << ((i - 8) * 3);
+    }
+    out[at + 2] = bitsLo & 255; out[at + 3] = (bitsLo >> 8) & 255; out[at + 4] = (bitsLo >> 16) & 255;
+    out[at + 5] = bitsHi & 255; out[at + 6] = (bitsHi >> 8) & 255; out[at + 7] = (bitsHi >> 16) & 255;
+  }
+
+  /** Largest mip level of a DDS that fits in maxSize, decoded to RGBA. */
+  function decodeDDSFit(dds, maxSize) {
+    let level = 0, w = dds.width, h = dds.height;
+    while (level + 1 < dds.mips && Math.max(w, h) > maxSize) { level++; w = Math.max(1, w >> 1); h = Math.max(1, h >> 1); }
+    let img = decodeDDS(dds, level);
+    while (Math.max(img.w, img.h) > maxSize) img = halve(img);
+    return img;
+  }
+
+  /**
+   * Make a texture usable in RoR: plain DXT1/3/5 DDS (up to 4096) and PNG/JPG are kept;
+   * anything else is re-encoded. With bake = {mask, paint}, the paint colour is mixed
+   * into the colour texture where BeamNG's paint mask says so.
+   */
+  function convertTexture(bytes, path, bake, maxSize) {
+    maxSize = maxSize || 2048;
+    if (!/\.dds$/i.test(path) && !bake) return { data: bytes, kept: true };
+    let img;
+    if (/\.dds$/i.test(path)) {
+      const dds = parseDDS(bytes);
+      if (!bake && dds.legacy && /^BC[123]$/.test(dds.format) && Math.max(dds.width, dds.height) <= 4096) return { data: bytes, kept: true };
+      img = decodeDDSFit(dds, maxSize);
+    } else throw new Error('paint baking needs a DDS texture');
+    if (bake) {
+      const m = decodeDDSFit(parseDDS(bake.mask), Math.max(img.w, img.h));
+      const p = bake.paint.map((v) => Math.max(0, Math.min(255, v * 255)));
+      for (let y = 0; y < img.h; y++) for (let x = 0; x < img.w; x++) {
+        const mx = Math.min(m.w - 1, Math.floor(x * m.w / img.w)), my = Math.min(m.h - 1, Math.floor(y * m.h / img.h));
+        const t = m.rgba[(my * m.w + mx) * 4] / 255, o = (y * img.w + x) * 4;
+        for (let c = 0; c < 3; c++) img.rgba[o + c] = Math.round(img.rgba[o + c] * (1 - t) + p[c] * t);
+      }
+    }
+    return { data: encodeDDS(img), kept: false, w: img.w, h: img.h };
   }
 
   /** "1-5,7,9-12" from a list of numbers. */
@@ -2747,7 +3061,7 @@
     }));
   }
 
-  const api = { addVisuals, parseCollada, colladaGeometry, writeOgreMesh, readOgreMesh, parseXML, makeZipCompressed, version: CONVERTER_VERSION, experiments: EXPERIMENTS, pack: PACK, _stabilizeModes: stabilizeModes, _simulateDrop: simulateDrop, parseJBeam, evalExpression, openZip, makeZip, loadLibrary, listVehicles, convert, buildModZip, filesToEntries, crc32 };
+  const api = { parseDDS, decodeDDS, encodeDDS, convertTexture, _bc7Block: bc7Block, addVisuals, parseCollada, colladaGeometry, writeOgreMesh, readOgreMesh, parseXML, makeZipCompressed, version: CONVERTER_VERSION, experiments: EXPERIMENTS, pack: PACK, _stabilizeModes: stabilizeModes, _simulateDrop: simulateDrop, parseJBeam, evalExpression, openZip, makeZip, loadLibrary, listVehicles, convert, buildModZip, filesToEntries, crc32 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.J2R = api;
 })(typeof self !== 'undefined' ? self : this);

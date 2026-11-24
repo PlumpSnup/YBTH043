@@ -29,6 +29,8 @@ const check = (cond, msg) => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${msg}`); 
   check(v.ok, `generated .truck passes the RoR syntax checks${v.ok ? '' : ': ' + v.errors.slice(0, 5).join('; ')}`);
   check(/^minimass\n0\.01, l$/m.test(truck), 'minimass override present (no 50 kg default)');
   check(/^enable_advanced_deformation$/m.test(truck), 'advanced deformation enabled');
+  const sbd = truck.split('\nbeams\n')[1].split('\n\n')[0].split('\n').filter((l) => l.startsWith('set_beam_defaults'));
+  check(sbd.length > 0 && sbd.every((l) => /, -1, tracks\/beam, 0$/.test(l)), 'beam groups set a plastic coefficient, so RoR keeps BeamNG\'s low deform thresholds (no 100 kN "creak" floor)');
   check(r.report.stats.config === 'sport', 'picked the .pc configuration');
   check(/tire_F_195/.test(JSON.stringify(lib.configs[0].data)) && /0\.315, 0\.195, 12/.test(truck), 'tire chosen by the .pc applied to the front wheels');
   check(/52000, 3500, 0\.3, 0\.3, 1\.08/.test(truck), '.pc variable override reached the front springs');

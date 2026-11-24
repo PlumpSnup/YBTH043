@@ -34,7 +34,8 @@ function validate(text) {
       if (kw === 'set_beam_defaults') {
         const a = line.split(/[\s,]+/).filter(Boolean);
         if (a.length < 2) errors.push(`line ${ln + 1}: set_beam_defaults needs a value`);
-        if (a.slice(1).some((x) => isNaN(+x))) errors.push(`line ${ln + 1}: bad number in set_beam_defaults`);
+        if (a.slice(1).some((x, q) => q !== 5 && isNaN(+x))) errors.push(`line ${ln + 1}: bad number in set_beam_defaults`);
+        if (a.length > 6 && !/^[\w/.-]+$/.test(a[6])) errors.push(`line ${ln + 1}: bad beam material in set_beam_defaults`);
         return;
       }
       if (kw === 'end') { ended = true; return; }

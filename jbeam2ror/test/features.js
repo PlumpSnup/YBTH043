@@ -150,6 +150,29 @@ for (const [S, s, y] of [['F', 'f', -1.3], ['R', 'r', 1.3]]) {
   check(/diffuse 0\.500 0\.250 0\.100/.test(mat), 'paint colour from the .pc applied to the painted material');
   check((mat.match(/^material /gm) || []).length === 2 && !/car_lamp/.test(vis.notes.join()), 'light material resolved through glowMap');
   check(/colour_write off/.test(rv.files.find((f) => /\.material$/.test(f.path) && !/-model/.test(f.path)).data), 'plain body panels hidden when the model is present');
+
+  // Textures: BC7 (DX10 header) is re-encoded to DXT for RoR's Direct3D 9 renderer
+  const dx10 = (w, h, dxgi, payload) => { const b = new Uint8Array(148 + payload.length); const d = new DataView(b.buffer); d.setUint32(0, 0x20534444, true); d.setUint32(4, 124, true); d.setUint32(12, h, true); d.setUint32(16, w, true); d.setUint32(28, 1, true); d.setUint32(76, 32, true); d.setUint32(80, 4, true); b.set([68, 88, 49, 48], 84); d.setUint32(128, dxgi, true); d.setUint32(132, 3, true); d.setUint32(140, 1, true); b.set(payload, 148); return b; };
+  const rnd = new Uint8Array(4 * 16).map(() => (Math.random() * 256) | 0);
+  for (let k = 0; k < 4; k++) rnd[k * 16] = (rnd[k * 16] & ~((2 << (k + 3)) - 1) & 255) | (1 << (k + 3));
+  const bc7 = J2R.decodeDDS(J2R.parseDDS(dx10(8, 8, 98, rnd)), 0);
+  const px = new Uint8Array(64); let same = true;
+  for (let k = 0; k < 4; k++) { J2R._bc7Block(rnd, k * 16, px); for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) for (let c = 0; c < 4; c++) if (bc7.rgba[(((k >> 1) * 4 + y) * 8 + (k & 1) * 4 + x) * 4 + c] !== px[(y * 4 + x) * 4 + c]) same = false; }
+  check(same, 'BC7 texture with a DX10 header decoded block by block (decoder itself checked against a GPU)');
+  const grad = new Uint8Array(64 * 64 * 4);
+  for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) { const o = (y * 64 + x) * 4; grad[o + 2] = x * 4; grad[o + 1] = y * 4; grad[o] = 128; grad[o + 3] = 255; } // BGRA
+  const conv = J2R.convertTexture(dx10(64, 64, 87, grad), 'a.dds', null);
+  const back = J2R.parseDDS(conv.data);
+  const img = J2R.decodeDDS(back, 0);
+  let err = 0; for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) { const o = (y * 64 + x) * 4; err += Math.abs(img.rgba[o] - x * 4) + Math.abs(img.rgba[o + 1] - y * 4) + Math.abs(img.rgba[o + 2] - 128); }
+  check(!conv.kept && back.legacy && back.format === 'BC1' && back.mips === 7 && err / (64 * 64 * 3) < 4, `re-encoded as DXT1 with mipmaps, mean error ${(err / (64 * 64 * 3)).toFixed(2)} of 255`);
+  check(J2R.convertTexture(conv.data, 'b.dds', null).kept, 'plain DXT textures are copied as they are');
+  const flat = (w, h, f) => { const b = new Uint8Array(w * h * 4); for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) b.set(f(x, y), (y * w + x) * 4); return b; };
+  const baked = J2R.decodeDDS(J2R.parseDDS(J2R.convertTexture(dx10(16, 16, 87, flat(16, 16, () => [200, 200, 200, 255])), 'c.dds', { mask: dx10(16, 16, 87, flat(16, 16, (x) => (x < 8 ? [0, 0, 0, 255] : [255, 255, 255, 255]))), paint: [0.5, 0.25, 0.1] }).data), 0);
+  const at = (x, y) => Array.from(baked.rgba.slice((y * 16 + x) * 4, (y * 16 + x) * 4 + 3));
+  const near = (a, b) => a.every((v, i) => Math.abs(v - b[i]) <= 6);
+  check(near(at(2, 5), [200, 200, 200]) && near(at(13, 5), [128, 64, 26]), `paint baked in through the mask only (unpainted ${at(2, 5)}, painted ${at(13, 5)})`);
+
   console.log(failed ? `\n${failed} check(s) failed` : '\nAll feature checks passed');
   process.exit(failed ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });
