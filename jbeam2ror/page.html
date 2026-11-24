@@ -349,9 +349,9 @@ footer p { margin: 0 0 6px; }
           <div class="row"><button type="button" id="packBtn">Download test pack</button><span class="status" id="packStatus"></span></div>
         </div>
       </details>
-      ${r.report.model ? `<details><summary>Troubleshooting the 3D model: download a crash test pack</summary>
+      ${r.report.model ? `<details><summary>Help find the steering wheel / gauges crash: download a test pack</summary>
         <div style="padding:0 12px 12px;display:grid;gap:8px;font-size:14px">
-          <p style="margin:0">If the game crashes when this car spawns, this zip holds six versions, each with one 3D feature switched off. Spawn each one (restart RoR after a crash) and note which ones don't crash.</p>
+          <p style="margin:0">The steering wheel, gauge needles, pedals and mirrors are left out for now because they crashed RoR on spawn. This zip holds five versions that add them back a bit at a time. Spawn each one (restart RoR after a crash) and note which ones crash.</p>
           <ul class="notes">${MODEL_TESTS.map((t) => `<li><b>[j2r ${esc(J2R.version)} ${t.tag}]</b>: ${esc(t.label)}</li>`).join('')}</ul>
           <div class="row"><button type="button" id="modelPackBtn">Download crash test pack</button><span class="status" id="modelPackStatus"></span></div>
         </div>
@@ -364,13 +364,11 @@ footer p { margin: 0 0 6px; }
   }
 
   const MODEL_TESTS = [
-    { tag: 'M1', label: 'everything (same as the normal download)', o: {} },
-    { tag: 'M2', label: 'no steering wheel, needles, pedals or mirrors (props)', o: { skipProps: true, skipMirrors: true } },
-    { tag: 'M3', label: 'no mirrors', o: { skipMirrors: true } },
-    { tag: 'M4', label: 'no lights (flares)', o: { skipLights: true } },
-    { tag: 'M5', label: 'no rims or tyres (RoR\'s plain wheels)', o: { skipWheels: true } },
-    { tag: 'M6', label: 'no exhaust node (engine sound back at node 0)', o: {}, noExhaust: true },
-    { tag: 'M7', label: 'all of the above off (like v18, which spawned fine)', o: { skipProps: true, skipMirrors: true, skipLights: true, skipWheels: true }, noExhaust: true },
+    { tag: 'P1', label: 'mirrors only (no steering wheel, needles or pedals)', o: { mirrors: true } },
+    { tag: 'P2', label: 'steering wheel, needles, pedals and fans, but none of them move', o: { props: 'static' } },
+    { tag: 'P3', label: 'only the steering wheel, turning', o: { props: 'steering' } },
+    { tag: 'P4', label: 'only the needles and pedals, moving', o: { props: 'gauges' } },
+    { tag: 'P5', label: 'everything (steering wheel, needles, pedals, fans, mirrors)', o: { props: 'all', mirrors: true } },
   ];
   async function saveModelPack() {
     const msg = $('modelPackStatus');
@@ -389,7 +387,7 @@ footer p { margin: 0 0 6px; }
     await new Promise((res) => setTimeout(res, 20));
     let bytes;
     try { bytes = await J2R.makeZipCompressed([...files.values()].map((f) => ({ path: f.path, data: f.data }))); } catch (e) { bytes = J2R.makeZip([...files.values()]); }
-    await saveFile(`${state.result.fileBase}_crash_test_pack.zip`, bytes, msg, `${MODEL_TESTS.length} builds`);
+    await saveFile(`${state.result.fileBase}_props_test_pack.zip`, bytes, msg, `${MODEL_TESTS.length} builds`);
   }
 
   let downloads;

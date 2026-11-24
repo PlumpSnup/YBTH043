@@ -20,7 +20,7 @@
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v19';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v20';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -2998,7 +2998,11 @@
     }
     const toR = (x, y, z) => [x, z, -y];
     const rearward = [-plan.fwd[0], -plan.fwd[1], -plan.fwd[2]];
-    for (const pr of opts.skipProps ? [] : plan.props || []) {
+    // Props crash RoR 2026.01 on spawn in some combinations (found with test builds), so
+    // they're only added when asked for (opts.props: 'all' | 'static' | 'steering' | 'gauges').
+    const propMode = opts.props || 'none';
+    const propWanted = (pr) => propMode === 'all' || propMode === 'static' || (propMode === 'steering' && pr.func.toLowerCase() === 'steering') || (propMode === 'gauges' && pr.func.toLowerCase() !== 'steering' && /wheelspeed|rpm|fuel|temp|throttle|brake|clutch|parkingbrake/i.test(pr.func));
+    for (const pr of (plan.props || []).filter(propWanted)) {
       const e = owner.get(pr.mesh);
       const item = e ? daeFor(e).meshes.get(pr.mesh) : null;
       if (!item) { propNotes.push(pr.mesh); continue; }
@@ -3039,12 +3043,12 @@
       const frame = frameNear(pivot, [pr.ref, pr.nx, pr.ny]);
       if (!frame) continue;
       const subs = g.subs.map((s2) => ({ material: s2.material, ogreMaterial: ogreMaterial(s2.material), idx: s2.idx }));
-      addProp(world, wn, g.uv, subs, pivot, axis, frame, staticDeg, anim);
+      addProp(world, wn, g.uv, subs, pivot, axis, frame, staticDeg, propMode === 'static' ? null : anim);
     }
 
     // Mirrors: BeamNG mirror glass uses the material "mirror", like RoR. A RoR prop whose
     // mesh name contains leftmirror/rightmirror and uses that material shows the view behind.
-    for (const [side, tris] of Object.entries(opts.skipMirrors ? {} : mirrorTris)) {
+    for (const [side, tris] of Object.entries(opts.mirrors ? mirrorTris : {})) {
       if (!tris.length) continue;
       const pos = [], nrm = [], uv = [], idx = [];
       let cen = [0, 0, 0], an = [0, 0, 0];

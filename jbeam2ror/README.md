@@ -28,7 +28,7 @@ node cli.js path/to/mod.zip --extra "path/to/BeamNG.drive/content/vehicles/commo
 | `triangles` / `quadTriangles` | `submesh` / `cab` (collision; hidden when the 3D model is included) |
 | `flexbodies` + `.dae` models | `flexbodies` + `forset`, one OGRE `.mesh` (v1.100) per part, placed with RoR's own FlexBody maths |
 | wheel meshes (rims, hubcaps, drums) | flexbodies on the tread nodes RoR generates for each wheel (numbered after the declared and cinecam nodes), so they spin; a tyre mesh is built to fit the rim |
-| `props` (steering wheel, needles, pedals) | `props` + `add_animation` (steeringwheel, speedo, tacho, accel, brakes, clutch, parking); the prop's X axis is pointed along its real spin axis |
+| `props` (steering wheel, needles, pedals), off by default: they crashed RoR 2026.01 on spawn, being narrowed down with test builds | `props` + `add_animation` (steeringwheel, speedo, tacho, accel, brakes, clutch, parking); the prop's X axis is pointed along its real spin axis |
 | glass/mesh with material `mirror` | `leftmirror` / `rightmirror` props: working rear-view mirrors |
 | `glowMap` lamps | `flares2` at each lamp lens (headlights, brake, tail, reverse, indicators) + `materialflarebindings` so lenses glow |
 | exhaust parts | an extra last node marked `x` (engine sound position) + `exhausts` (smoke) |
