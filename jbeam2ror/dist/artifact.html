@@ -174,8 +174,8 @@ footer p { margin: 0 0 6px; }
   </div>
 
   <footer>
-    <p>What carries over: the soft-body structure with BeamNG's node masses and beam stiffness, damping and deformation; springs and dampers; wheel size, mass and grip; brakes; steering; the engine torque curve, gears and final drive; and the 3D model (body, interior, engine bay) with its colour textures and paint, bending with the body when it crashes. You don't need BeamNG installed for most mods: tires and wheels the mod borrows from the game are rebuilt from their part names.</p>
-    <p>What doesn't (yet): the wheel and rim models (RoR draws its own wheels), shine and bump maps, gauge needles and the steering wheel, working lights, sounds, scripted features (ABS, ESC, electrics) and anti-roll bars. Convert only mods whose license lets you.</p>
+    <p>What carries over: the soft-body structure with BeamNG's node masses and beam stiffness, damping and deformation; springs and dampers; wheel size, mass and grip; brakes; steering; the engine torque curve, gears and final drive; and the 3D model (body, interior, engine bay, wheels) with its colour textures and paint, bending with the body when it crashes, plus a turning steering wheel, working gauges, pedals, mirrors and lights. You don't need BeamNG installed for most mods: tires and wheels the mod borrows from the game are rebuilt from their part names.</p>
+    <p>What doesn't (yet): BeamNG's own sounds (RoR's car sounds are used instead), opening doors, hood and trunk, wipers, shine and bump maps, scripted features (ABS, ESC, electrics) and anti-roll bars. Convert only mods whose license lets you.</p>
   </footer>
 </div>
 
@@ -202,7 +202,7 @@ footer p { margin: 0 0 6px; }
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v18';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v19';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -1139,7 +1139,7 @@ footer p { margin: 0 0 6px; }
           f = inF * (ext + ret) / 2;
         }
         if (!isFinite(f)) f = 0.1 * Math.sign(inF || 1);
-        steeringHydros.push({ a: String(a), b: String(b), bngFactor: f, explicitFactor: props.factor !== undefined, ...bp });
+        steeringHydros.push({ a: String(a), b: String(b), bngFactor: f, explicitFactor: props.factor !== undefined, wheelLock: num(props.steeringWheelLock, 0), ...bp });
       } else {
         beams.push({ a: String(a), b: String(b), ...bp, support: false });
       }
@@ -1373,6 +1373,8 @@ footer p { margin: 0 0 6px; }
         name: w.name, n1, n2, snode, arm: String(arm), radius, width: num(p.tireWidth, 0.2), rays, mass, spring, damp,
         braked, propulsed: driven.has(w.name) ? 1 : 0, brakeTorque, parkTorque,
         center: v3.mid(nodes.get(n1).pos, nodes.get(n2).pos),
+        groups: [w.cols.group, w.cols.hubGroup, p.group].flatMap((g) => (Array.isArray(g) ? g : [g])).filter((g) => typeof g === 'string' && g),
+        rimRadius: num(p.hubRadius, 0), tireWidth: num(p.tireWidth, 0),
       });
     }
     if (addedWheelMass > 0) {
@@ -1622,6 +1624,25 @@ footer p { margin: 0 0 6px; }
     }
 
     // -- write the .truck ----------------------------------------------------
+    // Exhaust: RoR plays the engine sound at the node marked 'x' (otherwise at node 0).
+    // RoR re-reads that mark for every node, so only the LAST node can carry it: add a small
+    // node just behind the tailpipe (rearmost node of BeamNG's exhaust parts), tied to it.
+    let exhaustDir = null;
+    {
+      const ex = [...nodes.values()].filter((nd) => nd.groups.some((gname) => /exhaust|muffler|tailpipe/i.test(gname)));
+      if (ex.length >= 2 && !nodes.has('j2r_exhaust')) {
+        const back = (nd) => -v3.dot(nd.pos, fwd);
+        const tip = ex.reduce((a, b) => (back(b) > back(a) ? b : a));
+        const prev = ex.filter((nd) => nd !== tip).reduce((a, b) => (v3.len(v3.sub(b.pos, tip.pos)) < v3.len(v3.sub(a.pos, tip.pos)) ? b : a));
+        const dir = v3.norm(v3.sub(tip.pos, prev.pos));
+        const third = nearestNode(tip.pos, new Set([tip.id, prev.id]));
+        if (third && v3.len(v3.sub(tip.pos, prev.pos)) > 0.02) {
+          nodes.set('j2r_exhaust', { id: 'j2r_exhaust', pos: v3.add(tip.pos, v3.scale(dir, 0.05)), weight: 1, collision: false, friction: 1, groups: [] });
+          for (const other of [tip.id, prev.id, third]) beams.push({ a: 'j2r_exhaust', b: other, spring: 200000, damp: 40, deform: BIG, strength: BIG, support: false });
+          exhaustDir = prev.id;
+        }
+      }
+    }
     const idx = new Map();
     let k = 0;
     for (const id of nodes.keys()) idx.set(id, k++);
@@ -1651,7 +1672,7 @@ footer p { margin: 0 0 6px; }
     L.push('');
     L.push('nodes');
     for (const nd of nodes.values()) {
-      const opt = 'l' + (nd.collision ? '' : 'c');
+      const opt = 'l' + (nd.collision ? '' : 'c') + (nd.id === 'j2r_exhaust' ? 'x' : '');
       L.push(`${N(nd.id)}, ${fmt(nd.pos[0])}, ${fmt(nd.pos[1])}, ${fmt(nd.pos[2])}, ${opt}, ${fmt(nd.weight, 4)} ;${nd.id}`);
     }
     L.push('');
@@ -1677,7 +1698,15 @@ footer p { margin: 0 0 6px; }
       L.push('');
     }
 
+    if (exhaustDir) {
+      L.push('; exhaust smoke (the sound plays at the node marked x)');
+      L.push('exhausts');
+      L.push(`${N('j2r_exhaust')}, ${N(exhaustDir)}, 1, default`);
+      L.push('');
+    }
+
     // Cinecam (driver view) from BeamNG's internal camera, if present
+    let numCinecams = 0; // every cinecam adds a node before RoR builds the wheel nodes
     const camRow = firstTable('camerasInternal');
     if (camRow && camRow.cols.x !== undefined) {
       const cp = toRoR(num(camRow.cols.x, 0), num(camRow.cols.y, 0), num(camRow.cols.z, 0));
@@ -1688,6 +1717,7 @@ footer p { margin: 0 0 6px; }
       if (attach.length === 8) {
         L.push(SAFE_DEFAULTS);
         L.push('cinecam');
+        numCinecams++;
         L.push(`${fmt(cp[0])}, ${fmt(cp[1])}, ${fmt(cp[2])}, ${attach.map(N).join(', ')}, 8000, 800`);
         L.push('');
       }
@@ -1878,7 +1908,63 @@ footer p { margin: 0 0 6px; }
     // Light materials: BeamNG swaps them at runtime (glowMap); RoR shows the "off" look
     const materialAlias = {};
     for (const { entry } of order) if (isDict(entry.part.glowMap)) for (const [k2, v2] of Object.entries(entry.part.glowMap)) if (isDict(v2) && typeof v2.off === 'string' && !(k2 in materialAlias)) materialAlias[k2] = v2.off;
-    const visualPlan = { model: veh.model, flexbodies, paint, materialAlias, nodes: planNodes, bodyNodes: planNodes.map((_, i) => i), num: String };
+    // RoR builds each wheel's tread nodes itself, numbered after the declared nodes and the
+    // cinecam nodes (ActorSpawnerFlow: nodes, cinecam, wheels), two per ray, outer ring
+    // (at node1) and inner ring (at node2) alternating. Same maths as BuildWheelObjectAndNodes,
+    // so wheel meshes can be attached to them and spin with the wheel.
+    const bodyNodes = planNodes.map((_, i) => i);
+    const planWheels = [];
+    {
+      let next = nodes.size + numCinecams;
+      for (const w of wheels) {
+        const p1 = nodes.get(w.n1).pos, p2 = nodes.get(w.n2).pos;
+        const axis = v3.norm(v3.sub(p2, p1));
+        let perp = v3.cross(axis, [1, 0, 0]);
+        if (v3.dot(perp, perp) < 1e-12) perp = v3.cross(axis, [0, 1, 0]);
+        let ray = v3.scale(v3.norm(perp), w.radius);
+        const th = -2 * Math.PI / (2 * w.rays), c = Math.cos(th), sn = Math.sin(th);
+        const rot = (v) => v3.add(v3.add(v3.scale(v, c), v3.scale(v3.cross(axis, v), sn)), v3.scale(axis, v3.dot(axis, v) * (1 - c)));
+        const tread = [];
+        for (let i = 0; i < w.rays; i++) {
+          planNodes[next] = { pos: v3.add(p1, ray), groups: [], generated: true }; tread.push(next++); ray = rot(ray);
+          planNodes[next] = { pos: v3.add(p2, ray), groups: [], generated: true }; tread.push(next++); ray = rot(ray);
+        }
+        planWheels.push({ name: w.name, groups: w.groups, n1: idx.get(w.n1), n2: idx.get(w.n2), arm: idx.get(w.arm), tread, radius: w.radius, rimRadius: w.rimRadius, tireWidth: w.tireWidth, center: w.center, axis });
+      }
+    }
+    // Props (steering wheel, needles, pedals...): rows hold objects (rotations), so read them directly
+    const propRows = [];
+    for (const { entry } of order) {
+      const t = entry.part.props;
+      if (!Array.isArray(t) || !isHeaderRow(t[0])) continue;
+      const h = t[0].map((x) => String(x).replace(/:$/, ''));
+      let state = {};
+      for (const raw of t.slice(1)) {
+        if (isDict(raw)) { state = Object.assign({}, state, evalValue(raw)); continue; }
+        if (!Array.isArray(raw)) continue;
+        const row = evalValue(raw);
+        const c = {};
+        h.forEach((k2, i2) => { if (i2 < row.length) c[k2] = row[i2]; });
+        const extra = row.length > h.length && isDict(row[row.length - 1]) ? row[row.length - 1] : {};
+        const o = Object.assign({}, state, extra);
+        if (typeof c.mesh !== 'string' || !c.mesh || /LIGHT$/i.test(c.mesh) || o.lightRange !== undefined) continue;
+        const nid = (x) => (hasNode(x) ? idx.get(String(x)) : null);
+        propRows.push({
+          func: String(c.func || ''), mesh: c.mesh, ref: nid(c.idRef), nx: nid(c.idX), ny: nid(c.idY),
+          rotation: vec(c.rotation, 0) || [0, 0, 0], translation: vec(c.translation, 0) || [0, 0, 0],
+          min: num(c.min, -Infinity), max: num(c.max, Infinity), offset: num(c.offset, 0), multiplier: num(c.multiplier, 1), part: entry.name,
+        });
+      }
+    }
+    // Lights: every glowMap material and the light functions that switch it on
+    const glow = {};
+    for (const { entry } of order) if (isDict(entry.part.glowMap)) for (const [k2, v2] of Object.entries(entry.part.glowMap)) {
+      if (!isDict(v2) || k2 in glow) continue;
+      const sf = v2.simpleFunction;
+      glow[k2] = { off: v2.off, on: v2.on, funcs: typeof sf === 'string' ? [sf] : isDict(sf) ? Object.keys(sf) : [] };
+    }
+    const steeringLock = Math.max(0, ...steering.map((h) => h.wheelLock || 0)) || 450;
+    const visualPlan = { model: veh.model, flexbodies, paint, materialAlias, props: propRows, glow, steeringLock, shiftUpRPM: engine ? engine.shiftUp : 6000, fwd, up, nodes: planNodes, bodyNodes, wheels: planWheels, num: String };
     return {
       _debug: opts.debug ? { nodes, beams, shocks, steeringHydros, steering, wheels, slidenodes, up } : undefined,
       truck,
@@ -2722,7 +2808,7 @@ footer p { margin: 0 0 6px; }
     // Which .dae file has which mesh name (quick scan of node names first)
     const daeEntries = [...(lib.files || new Map()).values()].filter((e) => /\.dae$/i.test(e.path));
     if (!daeEntries.length) { note('No .dae model files in the mod, so the body stays as plain panels. Use the full mod zip.'); return { added: 0, notes }; }
-    const wanted = new Set(plan.flexbodies.map((f) => f.mesh));
+    const wanted = new Set([...plan.flexbodies.map((f) => f.mesh), ...(plan.props || []).map((pr) => pr.mesh)]);
     const daeTexts = new Map();
     const dec = new TextDecoder('utf-8');
     const owner = new Map(); // mesh name -> entry
@@ -2758,6 +2844,25 @@ footer p { margin: 0 0 6px; }
       return n;
     }
     const c3 = (a) => a.map((x) => (+x).toFixed(3)).join(' ');
+    // RoR flare type for a BeamNG glowMap material (exterior lamps only)
+    const glow = plan.glow || {};
+    function lightType(key) {
+      const gl = glow[key];
+      if (!gl) return null;
+      const f = gl.funcs.map((x) => String(x).toLowerCase());
+      if (!f.some((x) => x.startsWith('lights_'))) return null; // dashboard warning lamps
+      if (f.some((x) => /signal_l$/.test(x))) return 'l';
+      if (f.some((x) => /signal_r$/.test(x))) return 'r';
+      if (f.some((x) => /brake/.test(x))) return 'b';
+      if (f.some((x) => /reverse/.test(x))) return 'R';
+      if (f.some((x) => /fog/.test(x))) return 'g';
+      if (f.some((x) => /lights_lowbeam/.test(x))) return 'f';
+      if (f.some((x) => /lights_highbeam/.test(x))) return 'h';
+      if (f.some((x) => /lowhighbeam|running|parking|tail/.test(x))) return 't';
+      return null;
+    }
+    const isTail = (key) => !!glow[key] && glow[key].funcs.some((x) => /lowhighbeam|running|tail/i.test(x));
+    const LIGHT_RGB = { f: [1, 1, 0.92], h: [1, 1, 0.92], g: [1, 1, 0.85], t: [0.9, 0.06, 0.03], b: [1, 0.06, 0.03], R: [1, 1, 1], l: [1, 0.55, 0.05], r: [1, 0.55, 0.05] };
     function ogreMaterial(bngName) {
       if (ogreMats.has(bngName)) return ogreMats.get(bngName).name;
       const name = `j2r/${prefix}/${bngName}`;
@@ -2793,13 +2898,15 @@ footer p { margin: 0 0 6px; }
       // colour texture's alpha, so translucent materials with an opacity map get a fixed alpha.
       if (translucent && s0.opacityMap && alpha >= 1) alpha = 0.35;
       const L2 = [`material ${name}`, '{', '\treceive_shadows on', '\ttechnique', '\t{', '\t\tpass', '\t\t{'];
-      if (/^invis/i.test(bngName)) { // BeamNG's invisible helper material
+      if (/^invis/i.test(bngName) || /^invis/i.test((plan.materialAlias || {})[bngName] || '')) { // BeamNG's invisible helper material (e.g. dashboard lamps when off)
         ogreMats.set(bngName, { name, text: [`material ${name}`, '{', '\ttechnique', '\t{', '\t\tpass', '\t\t{', '\t\t\tcolour_write off', '\t\t\tdepth_write off', '\t\t}', '\t}', '}', ''].join('\n') });
         return name;
       }
       L2.push(`\t\t\tambient ${c3(color)}`);
       L2.push(`\t\t\tdiffuse ${c3(color)} ${(+alpha).toFixed(3)}`);
       L2.push('\t\t\tspecular 0.25 0.25 0.25 1 24');
+      const lt = lightType(bngName);
+      if (lt) { L2.push(`\t\t\temissive ${c3(LIGHT_RGB[lt])}`); lightMats.set(name, lt); } // RoR turns this on with the lamp's flare
       if (def && def.doubleSided) L2.push('\t\t\tcull_hardware none');
       if (translucent) { L2.push('\t\t\tscene_blend alpha_blend'); L2.push('\t\t\tdepth_write off'); }
       else if (def && (def.alphaTest || +def.alphaRef > 0)) L2.push(`\t\t\talpha_rejection greater_equal ${Math.max(1, Math.min(255, Math.round(+def.alphaRef || 128)))}`);
@@ -2815,8 +2922,20 @@ footer p { margin: 0 0 6px; }
     const lines = [];
     const missingMesh = [];
     const skippedWheel = [];
+    const mirrorTris = { left: [], right: [] };
+    let mirrorsMade = 0;
+    const lightTris = new Map(); // flare type -> [{p, n, a, tail}]
+    const lightMats = new Map(); // OGRE material -> flare type
+    const rimOf = new Map(); // wheel -> rim vertex arrays (to size the tyre)
+    const wheelOf = (gname) => {
+      for (const w of plan.wheels || []) if (w.groups.includes(gname)) return w;
+      const m = /^(?:wheel|wheelhub|hubcap|tire|tyre)_(.+)$/i.exec(gname);
+      return m ? (plan.wheels || []).find((w) => w.name.toLowerCase() === m[1].toLowerCase()) || null : null;
+    };
+    const wheelish = (gname) => /^(wheel|wheelhub|hubcap|tire|tyre)_/i.test(gname) || (plan.wheels || []).some((w) => w.groups.includes(gname));
     let totalVerts = 0, totalTris = 0;
     const byNum = plan.nodes; // number -> {pos, groups}
+    const P0 = (n) => byNum[n].pos;
     const dist2 = (a, b) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
     const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
     const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
@@ -2824,9 +2943,13 @@ footer p { margin: 0 0 6px; }
     const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
     let fbIndex = 0;
     for (const fb of plan.flexbodies) {
-      // Wheel parts (rims, hubcaps, drums) belong to nodes RoR builds itself for its
-      // wheels; bolted to the body they would not spin, so RoR draws its own wheels.
-      if (fb.groups.some((gname) => /^(wheel|wheelhub|hubcap|tire|tyre)_/i.test(gname))) { skippedWheel.push(fb.mesh); continue; }
+      // Wheel parts (rims, hubcaps, discs, drums): every group belongs to a wheel, so they
+      // go on the tread nodes RoR builds for that wheel and spin with it.
+      let wheel = null;
+      if (fb.groups.length && fb.groups.every(wheelish)) {
+        wheel = fb.groups.map(wheelOf).find(Boolean) || null;
+        if (!wheel) { skippedWheel.push(fb.mesh); continue; }
+      }
       const e = owner.get(fb.mesh);
       if (!e) { missingMesh.push(fb.mesh); continue; }
       const dae = daeFor(e);
@@ -2855,8 +2978,9 @@ footer p { margin: 0 0 6px; }
       }
       const centroid = [0, 0, 0];
       for (let v = 0; v < nV; v++) for (let q = 0; q < 3; q++) centroid[q] += world[v * 3 + q] / nV;
+      if (wheel) forset = [...wheel.tread, wheel.n1, wheel.n2];
       // Too few nodes to hold a mesh: add the nearest body nodes
-      if (forset.length < 4) {
+      if (!wheel && forset.length < 4) {
         const extra = plan.bodyNodes.filter((n) => !forset.includes(n)).sort((a, b) => dist2(byNum[a].pos, centroid) - dist2(byNum[b].pos, centroid));
         forset = forset.concat(extra.slice(0, 6 - forset.length));
         if (fb.nodes.length === 0) note(`${fb.mesh}: its node group (${fb.groups.join(', ') || 'none'}) has no nodes here; attached to the nearest body nodes.`);
@@ -2871,16 +2995,19 @@ footer p { margin: 0 0 6px; }
         const vx = norm(sub(byNum[b].pos, byNum[a].pos));
         return !others.some((c) => c !== b && Math.abs(dot(vx, norm(sub(byNum[c].pos, byNum[a].pos)))) <= Math.SQRT1_2);
       });
-      if (lacksY(forset)) {
+      if (!wheel && lacksY(forset)) {
         const extra = plan.bodyNodes.filter((n) => !forset.includes(n)).sort((a, b) => dist2(byNum[a].pos, centroid) - dist2(byNum[b].pos, centroid));
         for (const n of extra) { forset.push(n); if (!lacksY(forset)) break; if (forset.length > fb.nodes.length + 12) break; }
       }
       // Placement frame (ref, x and y nodes)
       const P = (n) => byNum[n].pos;
-      const ref = forset.reduce((a, b) => (dist2(P(b), centroid) < dist2(P(a), centroid) ? b : a));
-      const nx = forset.filter((n) => n !== ref).reduce((a, b) => (dist2(P(b), P(ref)) > dist2(P(a), P(ref)) ? b : a));
+      // The placement frame must use nodes that exist when the line is read: for wheels,
+      // the axle and arm nodes (RoR's tread nodes are only allowed in the forset).
+      const frameSet = wheel ? [wheel.n1, wheel.n2, wheel.arm] : forset;
+      const ref = wheel ? wheel.n1 : frameSet.reduce((a, b) => (dist2(P(b), centroid) < dist2(P(a), centroid) ? b : a));
+      const nx = wheel ? wheel.n2 : frameSet.filter((n) => n !== ref).reduce((a, b) => (dist2(P(b), P(ref)) > dist2(P(a), P(ref)) ? b : a));
       const dx = sub(P(nx), P(ref));
-      const ny = forset.filter((n) => n !== ref && n !== nx).reduce((a, b) => (Math.hypot(...cross(dx, sub(P(b), P(ref)))) > Math.hypot(...cross(dx, sub(P(a), P(ref)))) ? b : a));
+      const ny = wheel ? wheel.arm : frameSet.filter((n) => n !== ref && n !== nx).reduce((a, b) => (Math.hypot(...cross(dx, sub(P(b), P(ref)))) > Math.hypot(...cross(dx, sub(P(a), P(ref)))) ? b : a));
       const dy = sub(P(ny), P(ref));
       if (Math.hypot(...cross(dx, dy)) < 1e-6) { note(`${fb.mesh}: its nodes are all in a line; skipped.`); continue; }
       // RoR (FlexBody.cpp): normal = |dy x dx|, refX = |dx|, refY = refX x normal; mesh axes (X, Y, Z) = (refX, normal, refY)
@@ -2895,7 +3022,38 @@ footer p { margin: 0 0 6px; }
         lp[v * 3] = dot(d, ax); lp[v * 3 + 1] = dot(d, normal); lp[v * 3 + 2] = dot(d, az);
         ln[v * 3] = dot(nn, ax); ln[v * 3 + 1] = dot(nn, normal); ln[v * 3 + 2] = dot(nn, az);
       }
-      const subsOut = g.subs.map((s) => ({ material: s.material, ogreMaterial: ogreMaterial(s.material), idx: s.idx }));
+      if (wheel && !/brake|drum|disc|caliper|hub_|centercap|hubcap/i.test(fb.mesh)) (rimOf.get(wheel) || rimOf.set(wheel, []).get(wheel)).push(world);
+      // Mirror glass becomes a working RoR mirror (a prop); lamp lenses tell where the flares go
+      let subsList = g.subs;
+      const triInfo = (idx, t) => {
+        const a = idx[t], b = idx[t + 1], c = idx[t + 2];
+        const A = [world[a * 3], world[a * 3 + 1], world[a * 3 + 2]], B = [world[b * 3], world[b * 3 + 1], world[b * 3 + 2]], C = [world[c * 3], world[c * 3 + 1], world[c * 3 + 2]];
+        const area = Math.hypot(...cross(sub(B, A), sub(C, A))) / 2;
+        const vn = [0, 1, 2].map((q) => wn[a * 3 + q] + wn[b * 3 + q] + wn[c * 3 + q]);
+        return { A, B, C, area, n: norm(vn).map((x) => x * area), p: [0, 1, 2].map((q) => (A[q] + B[q] + C[q]) / 3) };
+      };
+      if (!wheel && g.subs.some((s) => s.material === 'mirror')) {
+        const keep = [];
+        for (const s of g.subs) {
+          if (s.material !== 'mirror') { keep.push(s); continue; }
+          const rest = [];
+          for (let t = 0; t < s.idx.length; t += 3) {
+            const ti = triInfo(s.idx, t);
+            const side = ti.p[0] > 0.3 ? 'left' : ti.p[0] < -0.3 ? 'right' : null;
+            if (side) mirrorTris[side].push([ti.A, ti.B, ti.C, ti.n]); else rest.push(s.idx[t], s.idx[t + 1], s.idx[t + 2]);
+          }
+          if (rest.length) keep.push({ material: s.material, idx: rest });
+        }
+        subsList = keep;
+      }
+      for (const s of subsList) {
+        const type = lightType(s.material);
+        if (!type) continue;
+        if (!lightTris.has(type)) lightTris.set(type, []);
+        for (let t = 0; t < s.idx.length; t += 3) { const ti = triInfo(s.idx, t); lightTris.get(type).push({ p: ti.p, n: ti.n, a: ti.area, tail: isTail(s.material), mat: s.material }); }
+      }
+      if (!subsList.length) continue;
+      const subsOut = subsList.map((s) => ({ material: s.material, ogreMaterial: ogreMaterial(s.material), idx: s.idx }));
       const meshName = `${prefix}-${String(fbIndex++).padStart(3, '0')}-${fb.mesh.replace(/[^A-Za-z0-9_.-]+/g, '_')}.mesh`;
       meshFiles.push({ path: meshName, data: writeOgreMesh(lp, ln, g.uv, subsOut) });
       totalVerts += nV;
@@ -2905,15 +3063,271 @@ footer p { margin: 0 0 6px; }
       lines.push(`forset ${ranges(forset.map(plan.num).map(Number))}`);
       if (opts.previewData) (result.preview = result.preview || []).push({ mesh: fb.mesh, world, idx: g.subs.map((s) => s.idx) });
     }
-    if (skippedWheel.length) note(`Wheel parts are not converted yet (RoR draws its own wheels): ${[...new Set(skippedWheel)].join(', ')}`);
+    // Tyres: the mod's tyre models are usually base-game files, so build one that fits the
+    // rim (inner radius measured from the rim mesh) and the physics tyre (outer radius),
+    // attached to the tread nodes so it squashes and spins. RoR's own plain wheel drawing
+    // is then hidden for that wheel.
+    const hiddenMat = `j2r/${prefix}/hidden`;
+    const tyreMat = `j2r/${prefix}/tyre`;
+    const tyred = [];
+    for (const [w, rims] of rimOf) {
+      const c = w.center, a = w.axis;
+      let rimR = 0, axSum = 0, axN = 0;
+      const radial = (q) => { const d = [q[0] - c[0], q[1] - c[1], q[2] - c[2]]; const t = dot(d, a); return [Math.hypot(d[0] - a[0] * t, d[1] - a[1] * t, d[2] - a[2] * t), t]; };
+      for (const arr of rims) for (let v = 0; v < arr.length; v += 3) { const [r0] = radial([arr[v], arr[v + 1], arr[v + 2]]); if (r0 > rimR) rimR = r0; }
+      for (const arr of rims) for (let v = 0; v < arr.length; v += 3) { const [r0, t] = radial([arr[v], arr[v + 1], arr[v + 2]]); if (r0 > rimR * 0.9) { axSum += t; axN++; } }
+      const R = w.radius;
+      if (!(rimR > 0.05) || rimR > R * 0.97) continue;
+      const ri = rimR * 0.97, d = R - ri;
+      const h = Math.max(0.06, (w.tireWidth > 0.05 ? w.tireWidth : Math.hypot(...sub(P0(w.n2), P0(w.n1)))) / 2);
+      const t0 = axN ? axSum / axN : 0;
+      const prof = [[-0.86, ri], [-0.97, ri + 0.15 * d], [-1, ri + 0.5 * d], [-0.96, ri + 0.84 * d], [-0.84, R - 0.012], [-0.62, R], [0.62, R], [0.84, R - 0.012], [0.96, ri + 0.84 * d], [1, ri + 0.5 * d], [0.97, ri + 0.15 * d], [0.86, ri]];
+      const segs = 48;
+      const u = norm(Math.abs(a[1]) < 0.9 ? cross(a, [0, 1, 0]) : cross(a, [1, 0, 0])), vv = cross(a, u);
+      const pos = [], nrm = [], uv = [], idx = [];
+      const midR = (R + ri) / 2;
+      for (let sgi = 0; sgi <= segs; sgi++) {
+        const ang = 2 * Math.PI * sgi / segs, ca = Math.cos(ang), sa = Math.sin(ang);
+        const dir = [u[0] * ca + vv[0] * sa, u[1] * ca + vv[1] * sa, u[2] * ca + vv[2] * sa];
+        for (const [tt, rr] of prof) {
+          const ax = t0 + tt * h;
+          pos.push(c[0] + a[0] * ax + dir[0] * rr, c[1] + a[1] * ax + dir[1] * rr, c[2] + a[2] * ax + dir[2] * rr);
+          const nr = norm([dir[0] * (rr - midR) + a[0] * tt * h * 1.5, dir[1] * (rr - midR) + a[1] * tt * h * 1.5, dir[2] * (rr - midR) + a[2] * tt * h * 1.5]);
+          nrm.push(...nr); uv.push(sgi / segs, 0);
+        }
+      }
+      const np = prof.length;
+      for (let sgi = 0; sgi < segs; sgi++) for (let k = 0; k + 1 < np; k++) { const i0 = sgi * np + k, i1 = i0 + np; idx.push(i0, i1, i0 + 1, i0 + 1, i1, i1 + 1); }
+      // into the flexbody frame (axle node 1, axle node 2, arm node), as for the other meshes
+      const o = P0(w.n1), fx = sub(P0(w.n2), o), fy = sub(P0(w.arm), o);
+      const fnorm = norm(cross(fy, fx)), fax = norm(fx), faz = cross(fax, fnorm);
+      const nV = pos.length / 3, lp = new Float64Array(nV * 3), ln = new Float64Array(nV * 3);
+      for (let v = 0; v < nV; v++) {
+        const dd = [pos[v * 3] - o[0], pos[v * 3 + 1] - o[1], pos[v * 3 + 2] - o[2]], nn = [nrm[v * 3], nrm[v * 3 + 1], nrm[v * 3 + 2]];
+        lp[v * 3] = dot(dd, fax); lp[v * 3 + 1] = dot(dd, fnorm); lp[v * 3 + 2] = dot(dd, faz);
+        ln[v * 3] = dot(nn, fax); ln[v * 3 + 1] = dot(nn, fnorm); ln[v * 3 + 2] = dot(nn, faz);
+      }
+      const meshName = `${prefix}-tyre-${w.name.replace(/[^A-Za-z0-9_]+/g, '_')}.mesh`;
+      meshFiles.push({ path: meshName, data: writeOgreMesh(lp, ln, Float64Array.from(uv), [{ material: 'tyre', ogreMaterial: tyreMat, idx }]) });
+      totalVerts += nV; totalTris += idx.length / 3;
+      lines.push(`; tyre ${w.name} (built to fit the rim)`);
+      lines.push(`${plan.num(w.n1)}, ${plan.num(w.n2)}, ${plan.num(w.arm)}, 0, 0, 0, 0, 0, 0, ${meshName}`);
+      lines.push(`forset ${ranges([...w.tread, w.n1, w.n2])}`);
+      if (opts.previewData) (result.preview = result.preview || []).push({ mesh: 'tyre', world: Float64Array.from(pos), idx: [idx] });
+      tyred.push(w.name);
+    }
+    // ---- props (steering wheel, gauge needles, pedals), working mirrors, lights ----
+    const propLines = [];
+    const flareLines = [];
+    const bindLines = [];
+    const propNotes = [];
+    // Solve p - ref = a*dx + b*dy + c*n (RoR places props/flares this way)
+    const solve3 = (cols, r) => {
+      const [A, B, C] = cols;
+      const det = dot(A, cross(B, C));
+      if (Math.abs(det) < 1e-12) return null;
+      return [dot(r, cross(B, C)) / det, dot(A, cross(r, C)) / det, dot(A, cross(B, r)) / det];
+    };
+    const nearestBody = (p, k) => plan.bodyNodes.slice().sort((a, b) => dist2(P0(a), p) - dist2(P0(b), p)).slice(0, k);
+    // A frame (ref, x, y) whose plane is well defined near point p
+    function frameNear(p, given) {
+      if (given && given.every((n) => n !== null && n !== undefined && byNum[n])) {
+        const dx = sub(P0(given[1]), P0(given[0])), dy = sub(P0(given[2]), P0(given[0]));
+        if (Math.hypot(...cross(dx, dy)) > 1e-4) return given;
+      }
+      const c = nearestBody(p, 10);
+      for (let i = 0; i < c.length; i++) for (let j = 0; j < c.length; j++) for (let k = 0; k < c.length; k++) {
+        if (i === j || j === k || i === k) continue;
+        const dx = sub(P0(c[j]), P0(c[i])), dy = sub(P0(c[k]), P0(c[i]));
+        if (Math.hypot(...dx) > 0.05 && Math.hypot(...dy) > 0.05 && Math.hypot(...cross(norm(dx), norm(dy))) > 0.5) return [c[i], c[j], c[k]];
+      }
+      return null;
+    }
+    const fixed = (x, d) => (+x).toFixed(d === undefined ? 4 : d);
+    let propCount = 0;
+    /**
+     * A rigid RoR prop. Vertices are world (RoR) coordinates; the prop turns around
+     * `axis` through `pivot`: RoR builds the prop rotation as Rz * Ry * Rx, so ry and rz
+     * point the prop's X axis along `axis` and x-rotation animations turn around it.
+     */
+    function addProp(pos, nrm, uv, subs, pivot, axis, frame, staticDeg, anim, fileName) {
+      const [r0, x0, y0] = frame;
+      const dx = sub(P0(x0), P0(r0)), dy = sub(P0(y0), P0(r0));
+      const n = norm(cross(dy, dx)), fx = norm(dx), fz = cross(fx, n); // RoR prop frame columns: (refx, normal, refy)
+      const al = [dot(axis, fx), dot(axis, n), dot(axis, fz)];
+      const ry = -Math.asin(Math.max(-1, Math.min(1, al[2]))), rz = Math.atan2(al[1], al[0]);
+      // Q = F * Rz * Ry: columns are the prop's local axes in world space
+      const rotZ = (v) => [v[0] * Math.cos(rz) - v[1] * Math.sin(rz), v[0] * Math.sin(rz) + v[1] * Math.cos(rz), v[2]];
+      const rotY = (v) => [v[0] * Math.cos(ry) + v[2] * Math.sin(ry), v[1], -v[0] * Math.sin(ry) + v[2] * Math.cos(ry)];
+      const toWorld = (v) => { const l = rotZ(rotY(v)); return [fx[0] * l[0] + n[0] * l[1] + fz[0] * l[2], fx[1] * l[0] + n[1] * l[1] + fz[1] * l[2], fx[2] * l[0] + n[2] * l[1] + fz[2] * l[2]]; };
+      const qx = toWorld([1, 0, 0]), qy = toWorld([0, 1, 0]), qz = toWorld([0, 0, 1]);
+      const nV = pos.length / 3, lp = new Float64Array(nV * 3), ln = new Float64Array(nV * 3);
+      for (let v = 0; v < nV; v++) {
+        const d = [pos[v * 3] - pivot[0], pos[v * 3 + 1] - pivot[1], pos[v * 3 + 2] - pivot[2]], nn = [nrm[v * 3], nrm[v * 3 + 1], nrm[v * 3 + 2]];
+        lp[v * 3] = dot(d, qx); lp[v * 3 + 1] = dot(d, qy); lp[v * 3 + 2] = dot(d, qz);
+        ln[v * 3] = dot(nn, qx); ln[v * 3 + 1] = dot(nn, qy); ln[v * 3 + 2] = dot(nn, qz);
+      }
+      const off = solve3([dx, dy, n], sub(pivot, P0(r0)));
+      if (!off) return false;
+      const meshName = fileName || `j2r-${prefix}-prop${String(propCount++).padStart(2, '0')}.mesh`;
+      meshFiles.push({ path: meshName, data: writeOgreMesh(lp, ln, uv, subs) });
+      totalVerts += nV; totalTris += subs.reduce((s2, x) => s2 + x.idx.length / 3, 0);
+      propLines.push(`${plan.num(r0)}, ${plan.num(x0)}, ${plan.num(y0)}, ${fixed(off[0])}, ${fixed(off[1])}, ${fixed(off[2])}, ${fixed(staticDeg, 3)}, ${fixed(ry * 180 / Math.PI, 3)}, ${fixed(rz * 180 / Math.PI, 3)}, ${meshName}`);
+      if (anim) propLines.push(`add_animation ${fixed(anim.ratio, 4)}, -100000, 100000, source: ${anim.source}, mode: x-rotation`);
+      if (opts.previewData) (result.preview = result.preview || []).push({ mesh: meshName, world: Float64Array.from(pos), idx: subs.map((s2) => s2.idx), prop: { pivot, axis } });
+      return true;
+    }
+    const toR = (x, y, z) => [x, z, -y];
+    const rearward = [-plan.fwd[0], -plan.fwd[1], -plan.fwd[2]];
+    for (const pr of plan.props || []) {
+      const e = owner.get(pr.mesh);
+      const item = e ? daeFor(e).meshes.get(pr.mesh) : null;
+      if (!item) { propNotes.push(pr.mesh); continue; }
+      if (!item.cache) item.cache = colladaGeometry(daeFor(e), item);
+      const g = item.cache;
+      if (!g || !g.subs.length) continue;
+      const M = item.matrix;
+      const pivot = toR(M[3], M[7], M[11]);
+      const nV = g.pos.length / 3, world = new Float64Array(nV * 3), wn = new Float64Array(nV * 3);
+      for (let v = 0; v < nV; v++) {
+        world.set(toR(g.pos[v * 3], g.pos[v * 3 + 1], g.pos[v * 3 + 2]), v * 3);
+        wn.set(toR(g.nrm[v * 3], g.nrm[v * 3 + 1], g.nrm[v * 3 + 2]), v * 3);
+      }
+      // rotation axis: the prop's rotation vector in the mesh's own (Collada node) frame
+      const m = Math.hypot(...pr.rotation);
+      let axis = [1, 0, 0];
+      if (m > 1e-9) { const r = pr.rotation.map((x) => x / m); axis = norm(toR(M[0] * r[0] + M[1] * r[1] + M[2] * r[2], M[4] * r[0] + M[5] * r[1] + M[6] * r[2], M[8] * r[0] + M[9] * r[1] + M[10] * r[2])); }
+      // BeamNG: angle = rotation * (clamp(value, min, max) + offset) * multiplier
+      const k = m * pr.multiplier;
+      const clamp = (v) => Math.max(pr.min, Math.min(pr.max, v));
+      const f = pr.func.toLowerCase();
+      let anim = null, staticDeg = k * (clamp(0) + pr.offset);
+      if (m > 1e-9) {
+        if (f === 'steering') {
+          // turn clockwise (seen by the driver) when steering right; RoR's steering state is +1 at full right lock
+          if (dot(axis, rearward) < 0) axis = axis.map((x) => -x);
+          anim = { source: 'steeringwheel', ratio: -plan.steeringLock * pr.multiplier };
+          staticDeg = 0;
+        } else if (f === 'wheelspeed') { anim = { source: 'speedo', ratio: -k * 140 / 3 }; staticDeg = k * pr.offset; } // RoR: -3 * (m/s) / 140
+        else if ((f === 'rpm' || f === 'rpmtacho') && /needle|tacho/i.test(pr.mesh)) { anim = { source: 'tacho', ratio: -k * plan.shiftUpRPM }; staticDeg = k * pr.offset; }
+        else if (f === 'throttle') { anim = { source: 'accel', ratio: -k }; staticDeg = k * (pr.offset - 0.06); }
+        else if (f === 'brake') { anim = { source: 'brakes', ratio: -k }; staticDeg = k * pr.offset; }
+        else if (f === 'clutch') { anim = { source: 'clutch', ratio: -k }; staticDeg = k * pr.offset; }
+        else if (f === 'parkingbrake') { anim = { source: 'parking', ratio: -k }; staticDeg = k * pr.offset; }
+        else if (f === 'fuel') staticDeg = k * (clamp(0.7) + pr.offset); // fuel is a 0-1 fraction; shown at 70 %
+        else if (f === 'watertemp' || f === 'oiltemp') staticDeg = k * (clamp(90) + pr.offset);
+      }
+      const frame = frameNear(pivot, [pr.ref, pr.nx, pr.ny]);
+      if (!frame) continue;
+      const subs = g.subs.map((s2) => ({ material: s2.material, ogreMaterial: ogreMaterial(s2.material), idx: s2.idx }));
+      addProp(world, wn, g.uv, subs, pivot, axis, frame, staticDeg, anim);
+    }
+
+    // Mirrors: BeamNG mirror glass uses the material "mirror", like RoR. A RoR prop whose
+    // mesh name contains leftmirror/rightmirror and uses that material shows the view behind.
+    for (const [side, tris] of Object.entries(mirrorTris)) {
+      if (!tris.length) continue;
+      const pos = [], nrm = [], uv = [], idx = [];
+      let cen = [0, 0, 0], an = [0, 0, 0];
+      for (const t of tris) { for (let q = 0; q < 3; q++) cen = cen.map((c2, i) => c2 + t[q][i] / (tris.length * 3)); an = an.map((c2, i) => c2 + t[3][i]); }
+      an = norm(an);
+      const u = norm(Math.abs(an[1]) < 0.9 ? cross([0, 1, 0], an) : cross([1, 0, 0], an)), w = cross(an, u);
+      let lo = [Infinity, Infinity], hi = [-Infinity, -Infinity];
+      for (const t of tris) for (let q = 0; q < 3; q++) { const d = sub(t[q], cen); const a2 = [dot(d, u), dot(d, w)]; lo = lo.map((x, i) => Math.min(x, a2[i])); hi = hi.map((x, i) => Math.max(x, a2[i])); }
+      for (const t of tris) for (let q = 0; q < 3; q++) {
+        const d = sub(t[q], cen);
+        pos.push(...t[q]); nrm.push(...an);
+        uv.push(1 - (dot(d, u) - lo[0]) / ((hi[0] - lo[0]) || 1), 1 - (dot(d, w) - lo[1]) / ((hi[1] - lo[1]) || 1));
+        idx.push(idx.length);
+      }
+      const frame = frameNear(cen, null);
+      if (frame && addProp(Float64Array.from(pos), Float64Array.from(nrm), Float64Array.from(uv), [{ material: 'mirror', ogreMaterial: 'mirror', idx }], cen, [1, 0, 0], frame, 0, null, `j2r-${prefix}-${side}mirror.mesh`)) mirrorsMade++;
+    }
+
+    // Lights: one RoR flare per lamp (found from the lamp's lens in the model), and the
+    // lens material glows while that flare is on ('materialflarebindings').
+    const flareIndex = new Map(); // type -> first flare index
+    const carCenter = plan.bodyNodes.reduce((acc, nn) => acc.map((c2, i) => c2 + P0(nn)[i] / plan.bodyNodes.length), [0, 0, 0]);
+    const along = (p) => dot(sub(p, carCenter), plan.fwd);
+    let nFlares = 0;
+    const flareTypesOrder = ['f', 'h', 'g', 't', 'b', 'R', 'l', 'r'];
+    for (const type of flareTypesOrder) {
+      const tris = lightTris.get(type) || [];
+      const clusters = new Map();
+      // one lamp per material and side (a material can cover both headlights) ...
+      for (const t of tris) {
+        const key = `${t.mat}|${t.p[0] > 0.12 ? 'L' : t.p[0] < -0.12 ? 'R' : 'C'}`;
+        if (!clusters.has(key)) clusters.set(key, { a: 0, p: [0, 0, 0], n: [0, 0, 0] });
+        const c2 = clusters.get(key);
+        c2.a += t.a; c2.p = c2.p.map((x, i) => x + t.p[i] * t.a); c2.n = c2.n.map((x, i) => x + t.n[i]); c2.tail = c2.tail || t.tail;
+      }
+      // ... then lens + housing of the same lamp (close together) become one
+      const lamps = [];
+      for (const c2 of clusters.values()) {
+        if (c2.a < 1e-5) continue;
+        const p = c2.p.map((x) => x / c2.a);
+        const same = lamps.find((l2) => Math.hypot(...sub(l2.p, p)) < 0.25);
+        if (same) { const a2 = same.a + c2.a; same.p = same.p.map((x, i) => (x * same.a + p[i] * c2.a) / a2); same.n = same.n.map((x, i) => x + c2.n[i]); same.a = a2; same.tail = same.tail || c2.tail; }
+        else lamps.push({ a: c2.a, p, n: c2.n.slice(), tail: c2.tail });
+      }
+      const made = [];
+      for (const c2 of lamps) {
+        const p = c2.p;
+        let out = Math.hypot(...c2.n) > 1e-6 ? norm(c2.n) : null;
+        const radial = sub(p, carCenter);
+        if (!out || Math.abs(dot(out, norm(radial))) < 0.2) out = norm(Math.abs(along(p)) > 1 ? plan.fwd.map((x) => x * Math.sign(along(p))) : radial);
+        if (dot(out, radial) < 0) out = out.map((x) => -x);
+        // shine level (lens normals of curved lenses point up); headlights straight ahead
+        const upv = plan.up || [0, 1, 0];
+        out = norm(sub(out, upv.map((x) => x * dot(out, upv))));
+        if (type === 'f' || type === 'h' || type === 'g') out = plan.fwd.slice();
+        // frame whose normal points INTO the car (RoR shows the flare when seen from outside, and shines along -normal)
+        const cand = nearestBody(p, 12);
+        let best = null;
+        for (let i = 0; i < Math.min(5, cand.length); i++) for (let j = 0; j < cand.length; j++) for (let k2 = 0; k2 < cand.length; k2++) {
+          if (j === i || k2 === i || k2 === j) continue;
+          const dx = sub(P0(cand[j]), P0(cand[i])), dy = sub(P0(cand[k2]), P0(cand[i]));
+          if (Math.hypot(...dx) < 0.04 || Math.hypot(...dy) < 0.04) continue;
+          const nn = norm(cross(dy, dx));
+          const facing = -dot(nn, out);
+          if (!(facing > 0.6)) continue;
+          const dist = Math.abs(dot(sub(p, P0(cand[i])), nn));
+          const score = dist + 0.15 * (1 - facing);
+          if (!best || score < best.score) best = { score, f: [cand[i], cand[j], cand[k2]], dx, dy, nn };
+        }
+        if (!best) continue;
+        const o = solve3([best.dx, best.dy, best.nn], sub(p, P0(best.f[0])));
+        if (!o) continue;
+        const size = type === 'f' || type === 'h' ? 0.6 : type === 'g' ? 0.45 : 0.35;
+        flareLines.push(`${best.f.map(plan.num).join(', ')}, ${fixed(o[0])}, ${fixed(o[1])}, 1, ${type}, -1, ${type === 'l' || type === 'r' ? -1 : 0}, ${size}, default`);
+        made.push(nFlares++);
+        // brake lamps that are also tail lamps: a tail flare too, so they glow at night
+        if (type === 'b' && c2.tail) { flareLines.push(`${best.f.map(plan.num).join(', ')}, ${fixed(o[0])}, ${fixed(o[1])}, 1, t, -1, 0, 0.25, default`); nFlares++; }
+      }
+      if (made.length) flareIndex.set(type, made[0]);
+    }
+    for (const [matName, type] of lightMats) if (flareIndex.has(type)) bindLines.push(`${flareIndex.get(type)}, ${matName}`);
+
+    if (propNotes.length) note(`${propNotes.length} prop(s) are not in the mod's model files: ${[...new Set(propNotes)].join(', ')}`);
+    if (skippedWheel.length) note(`Wheel parts that match no wheel were left out: ${[...new Set(skippedWheel)].join(', ')}`);
+    if (tyred.length) note(`Tyres built to fit the rims on ${tyred.length} wheel(s) (the mod's own tyre models come from the base game).`);
     if (missingMesh.length) note(`${missingMesh.length} 3D part(s) are not in the mod's model files (base-game parts): ${[...new Set(missingMesh)].slice(0, 25).join(', ')}${missingMesh.length > 25 ? '…' : ''}`);
     if (missingMats.size) note(`${missingMats.size} material(s) come from the base game and are shown in plain grey: ${[...missingMats].slice(0, 20).join(', ')}${missingMats.size > 20 ? '…' : ''}`);
     if (missingTex.size) note(`${missingTex.size} texture(s) were not found in the mod: ${[...missingTex].slice(0, 12).join(', ')}${missingTex.size > 12 ? '…' : ''}`);
     if (!lines.length) return { added: 0, notes };
 
     // .truck: flexbodies before 'end'; hide the plain body panels (still there for physics)
-    const fbSection = ['; 3D model (BeamNG flexbodies): each mesh follows the nodes of its part', 'flexbodies', ...lines, ''].join('\n');
+    const fbSection = ['; 3D model (BeamNG flexbodies): each mesh follows the nodes of its part', 'flexbodies', ...lines, '',
+      ...(propLines.length ? ['; steering wheel, gauge needles, pedals and mirrors (rigid props; x-rotation turns them around their real axis)', 'props', ...propLines, ''] : []),
+      ...(flareLines.length ? ['; lamps: ref, x, y, offset x, offset y, pull, type, control, blink, size, material', 'flares2', ...flareLines, ''] : []),
+      ...(bindLines.length ? ['; lamp lenses glow while their flare is on', 'materialflarebindings', ...bindLines, ''] : []),
+    ].join('\n');
     result.truck = result.truck.replace(/\nend\n*$/, `\n${fbSection}\nend\n`);
+    for (const name of tyred) result.truck = result.truck.replace(new RegExp(`, tracks/wheelface, tracks/wheelband1 ;${name.replace(/[^A-Za-z0-9_]/g, '\\$&')}$`, 'm'), `, ${hiddenMat}, ${hiddenMat} ;${name}`);
+    if (tyred.length) {
+      ogreMats.set('#hidden', { name: hiddenMat, text: [`material ${hiddenMat}`, '{', '\ttechnique', '\t{', '\t\tpass', '\t\t{', '\t\t\tcolour_write off', '\t\t\tdepth_write off', '\t\t}', '\t}', '}', ''].join('\n') });
+      ogreMats.set('#tyre', { name: tyreMat, text: [`material ${tyreMat}`, '{', '\treceive_shadows on', '\ttechnique', '\t{', '\t\tpass', '\t\t{', '\t\t\tambient 0.07 0.07 0.07', '\t\t\tdiffuse 0.07 0.07 0.07 1', '\t\t\tspecular 0.12 0.12 0.12 1 10', '\t\t\tcull_hardware none', '\t\t}', '\t}', '}', ''].join('\n') });
+    }
     const matFile = result.files.find((f) => /\.material$/.test(f.path));
     if (matFile && !opts.keepPanels) {
       matFile.data = matFile.data.replace(/\{[\s\S]*$/, ['{', '\ttechnique', '\t{', '\t\tpass', '\t\t{', '\t\t\tcolour_write off', '\t\t\tdepth_write off', '\t\t}', '\t}', '}', ''].join('\n'));

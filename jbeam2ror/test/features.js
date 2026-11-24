@@ -23,15 +23,20 @@ const parts = {
     slotType: 'car_body',
     nodes: [['id', 'posX', 'posY', 'posZ'], { nodeWeight: 20, group: 'car_body' }, ...box, { group: '' }],
     flexbodies: [['mesh', '[group]:', 'nonFlexMaterials'], ['car_shell', ['car_body'], []], ['car_rim', ['wheel_FL'], []], ['not_in_dae', ['car_body'], []]],
-    glowMap: { car_lamp: { off: 'car_paint', on: 'car_lamp_on' } },
+    glowMap: { car_lamp: { off: 'car_paint', on: 'car_lamp_on', simpleFunction: 'lights_brake' } },
+    props: [['func', 'mesh', 'idRef:', 'idX:', 'idY:', 'baseRotation', 'rotation', 'translation', 'min', 'max', 'offset', 'multiplier'],
+      ['steering', 'car_steer', 'b1l', 'b1r', 't1l', { x: 0, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }, { x: 0, y: 0, z: 0 }, -1000, 1000, 0, 1],
+      ['wheelspeed', 'car_needle', 'b1l', 'b1r', 't1l', { x: 0, y: 0, z: 0 }, { x: 0, y: -4, z: 0 }, { x: 0, y: 0, z: 0 }, 0, 70, 2, 1]],
     beams: [['id1:', 'id2:'], { beamSpring: 2001000, beamDamp: 100 }, ...boxBeams],
     components: { headerNodePos: { x: 0.2, y: -1.2, z: 0.5 } },
   },
   car_glass: { slotType: 'car_glass', nodes: [['id', 'posX', 'posY', 'posZ'], { nodeWeight: 23.5 }, ['t1l', 0.6, 0, 0.9]] },
   car_engine: {
     slotType: 'car_engine',
-    nodes: [['id', 'posX', 'posY', 'posZ'], { nodeWeight: 30 }, ['hdr', '$=$components.headerNodePos.x', '$=$components.headerNodePos.y', '$=$components.headerNodePos.z']],
-    beams: [['id1:', 'id2:'], { beamSpring: 2001000, beamDamp: 100 }, ['hdr', 'b0l'], ['hdr', 'b0r'], ['hdr', 't0l'], ['hdr', 'b1l']],
+    nodes: [['id', 'posX', 'posY', 'posZ'], { nodeWeight: 30 }, ['hdr', '$=$components.headerNodePos.x', '$=$components.headerNodePos.y', '$=$components.headerNodePos.z'],
+      { nodeWeight: 3, group: 'car_exhaust' }, ['ex1', 0.3, 1.2, 0.3], ['ex2', 0.3, 1.8, 0.3], { group: '' }],
+    beams: [['id1:', 'id2:'], { beamSpring: 2001000, beamDamp: 100 }, ['hdr', 'b0l'], ['hdr', 'b0r'], ['hdr', 't0l'], ['hdr', 'b1l'],
+      ['ex1', 'b1l'], ['ex1', 'b2l'], ['ex1', 'b1r'], ['ex2', 'b2l'], ['ex2', 'b2r'], ['ex2', 't2l'], ['ex1', 'ex2']],
     powertrain: [['type', 'name', 'inputName', 'inputIndex'], ['combustionEngine', 'mainEngine', 'dummy', 0], ['manualGearbox', 'gearbox', 'mainEngine', 1],
       ['differential', 'differential_F', 'gearbox', 1], ['shaft', 'wheelaxleFL', 'differential_F', 1], ['shaft', 'wheelaxleFR', 'differential_F', 2]],
     mainEngine: { torque: [['rpm', 'torque'], [0, 0], [3000, 150], [6000, 120]], idleRPM: 800, maxRPM: 6500 },
@@ -79,7 +84,7 @@ for (const [S, s, y] of [['F', 'f', -1.3], ['R', 'r', 1.3]]) {
   // (triangles) with a light material, under a node that is moved by 0.1 m in z.
   const dae = `<?xml version="1.0"?><COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
   <asset><unit meter="1"/><up_axis>Z_UP</up_axis></asset>
-  <library_materials><material id="paint-material" name="car_paint"/><material id="lamp-material" name="car_lamp"/></library_materials>
+  <library_materials><material id="paint-material" name="car_paint"/><material id="lamp-material" name="car_lamp"/><material id="mirror-material" name="mirror"/></library_materials>
   <library_geometries><geometry id="g1" name="g1"><mesh>
     <source id="g1-pos"><float_array id="g1-pos-a" count="15">0.6 -1.5 0.9  -0.6 -1.5 0.9  -0.6 1.5 0.9  0.6 1.5 0.9  0 0 0.3</float_array><technique_common><accessor source="#g1-pos-a" count="5" stride="3"/></technique_common></source>
     <source id="g1-n"><float_array id="g1-n-a" count="3">0 0 1</float_array><technique_common><accessor source="#g1-n-a" count="1" stride="3"/></technique_common></source>
@@ -87,9 +92,14 @@ for (const [S, s, y] of [['F', 'f', -1.3], ['R', 'r', 1.3]]) {
     <vertices id="g1-v"><input semantic="POSITION" source="#g1-pos"/></vertices>
     <polylist material="paint-material" count="1"><input semantic="VERTEX" source="#g1-v" offset="0"/><input semantic="NORMAL" source="#g1-n" offset="1"/><input semantic="TEXCOORD" source="#g1-uv" offset="2" set="0"/><vcount>4</vcount><p>0 0 0 1 0 1 2 0 2 3 0 3</p></polylist>
     <triangles material="lamp-material" count="1"><input semantic="VERTEX" source="#g1-v" offset="0"/><p>0 1 4</p></triangles>
-  </mesh></geometry></library_geometries>
+    <triangles material="mirror-material" count="1"><input semantic="VERTEX" source="#g1-v" offset="0"/><p>0 3 4</p></triangles>
+  </mesh></geometry>
+  <geometry id="g2" name="g2"><mesh><source id="g2-pos"><float_array id="g2-pos-a" count="9">0.15 0 0  -0.1 0 0.1  -0.1 0 -0.1</float_array><technique_common><accessor source="#g2-pos-a" count="3" stride="3"/></technique_common></source>
+    <vertices id="g2-v"><input semantic="POSITION" source="#g2-pos"/></vertices><triangles count="1"><input semantic="VERTEX" source="#g2-v" offset="0"/><p>0 1 2</p></triangles></mesh></geometry></library_geometries>
   <library_visual_scenes><visual_scene id="Scene"><node id="car_shell" name="car_shell"><matrix>1 0 0 0 0 1 0 0 0 0 1 0.1 0 0 0 1</matrix>
-    <instance_geometry url="#g1"><bind_material><technique_common><instance_material symbol="paint-material" target="#paint-material"/><instance_material symbol="lamp-material" target="#lamp-material"/></technique_common></bind_material></instance_geometry></node>
+    <instance_geometry url="#g1"><bind_material><technique_common><instance_material symbol="paint-material" target="#paint-material"/><instance_material symbol="lamp-material" target="#lamp-material"/><instance_material symbol="mirror-material" target="#mirror-material"/></technique_common></bind_material></instance_geometry></node>
+    <node id="car_steer" name="car_steer"><matrix>1 0 0 0.3 0 1 0 -0.5 0 0 1 0.8 0 0 0 1</matrix><instance_geometry url="#g2"/></node>
+    <node id="car_needle" name="car_needle"><matrix>1 0 0 0.3 0 1 0 -0.6 0 0 1 0.85 0 0 0 1</matrix><instance_geometry url="#g2"/></node>
     <node id="car_rim" name="car_rim"><instance_geometry url="#g1"/></node></visual_scene></library_visual_scenes></COLLADA>`;
   const mats = `{"car_paint": {"name": "car_paint", "mapTo": "car_paint", "class": "material", "Stages": [{"baseColorMap": "vehicles/car/car_b.color.png"}, {"instanceDiffuse": true}, {}, {},]}}`;
   const pc = { parts: {}, paints: [{ baseColor: [0.5, 0.25, 0.1, 1.2] }] };
@@ -122,12 +132,15 @@ for (const [S, s, y] of [['F', 'f', -1.3], ['R', 'r', 1.3]]) {
   const rv = J2R.convert(lib, { debug: 'quiet', config: 'red' });
   const vis = await J2R.addVisuals(lib, rv, {});
   const vt = require('./validate-truck.js').validate(rv.truck);
-  check(vis.added === 1 && /^flexbodies$/m.test(rv.truck) && /^forset \d/m.test(rv.truck) && vt.ok, `flexbody + forset written and valid${vt.ok ? '' : ': ' + vt.errors.join('; ')}`);
-  check(vis.notes.some((x) => /not_in_dae/.test(x)) && vis.notes.some((x) => /car_rim/.test(x)), 'parts missing from the model and wheel parts are reported');
+  check(vis.added >= 1 && /^flexbodies$/m.test(rv.truck) && /^forset \d/m.test(rv.truck) && vt.ok, `flexbody + forset written and valid${vt.ok ? '' : ': ' + vt.errors.join('; ')}`);
+  check(vis.notes.some((x) => /not_in_dae/.test(x)), 'parts missing from the model are reported');
+  const nDeclared = (rv.truck.match(/^\d+, -?[\d.]+, -?[\d.]+, -?[\d.]+, l/gm) || []).length;
+  const rimForset = rv.truck.split('\n').find((l, i, all) => /car_rim/.test(all[i - 1] || '') && l.startsWith('forset')) || rv.truck.split('\n')[rv.truck.split('\n').findIndex((l) => /^; car_rim/.test(l)) + 2];
+  check(rimForset && rimForset.slice(7).split(',').some((r) => +r.split('-').pop() >= nDeclared + 1), `wheel parts go on the tread nodes RoR builds for the wheel (${rimForset})`);
   const meshFile = rv.files.find((f) => /\.mesh$/.test(f.path));
   const M = J2R.readOgreMesh(meshFile.data);
   check(M.version === '[MeshSerializer_v1.100]' && M.vertexSize === 32 && M.vertexBytes === 32 * M.vertexCount && JSON.stringify(M.decl) === '[[0,2,1,0,0],[0,2,4,12,0],[0,1,7,24,0]]', 'OGRE mesh header, vertex declaration and buffer sizes');
-  check(M.submeshes.length === 2 && M.submeshes.every((x) => x.shared === 1 && x.op === 4) && M.submeshes[0].idx.length === 6 && M.submeshes[1].idx.length === 3, 'one shared vertex buffer, one triangle-list submesh per material (quad split in two)');
+  check(M.submeshes.length === 2 && M.submeshes.every((x) => x.shared === 1 && x.op === 4) && M.submeshes[0].idx.length === 6 && M.submeshes[1].idx.length === 3, 'one shared vertex buffer, one triangle-list submesh per material (quad split in two, mirror glass taken out)');
   // Place like RoR: frame from the ref/x/y nodes of the flexbody line
   const fbLine = rv.truck.split('\n')[rv.truck.split('\n').findIndex((l) => l === 'flexbodies') + 2].split(/\s*,\s*/);
   const nodePos = {};
@@ -148,7 +161,26 @@ for (const [S, s, y] of [['F', 'f', -1.3], ['R', 'r', 1.3]]) {
   const mat = rv.files.find((f) => /-model\.material$/.test(f.path)).data;
   check(/texture car_b\.color\.dds/.test(mat) && rv.files.some((f) => f.path === 'car_b.color.dds'), 'material uses the .dds that ships instead of the .png named in materials.json');
   check(/diffuse 0\.500 0\.250 0\.100/.test(mat), 'paint colour from the .pc applied to the painted material');
-  check((mat.match(/^material /gm) || []).length === 2 && !/car_lamp/.test(vis.notes.join()), 'light material resolved through glowMap');
+  check(/car_lamp[\s\S]*?emissive 1\.000 0\.060 0\.030/.test(mat) && !/car_lamp/.test(vis.notes.join()), 'lamp material resolved through glowMap, with a brake-red glow');
+  const sect = (name) => { const L2 = rv.truck.split('\n'); const i = L2.indexOf(name); if (i < 0) return []; const out = []; for (let j = i + 1; j < L2.length && L2[j] !== ''; j++) out.push(L2[j]); return out; };
+  const flares = sect('flares2'), binds = sect('materialflarebindings');
+  check(flares.some((l) => /, b, -1, 0, /.test(l)) && binds.length === 1 && new RegExp(`^0, j2r/[^,]*/car_lamp$`).test(binds[0]), `brake lamp: a 'b' flare and its lens bound to it (${binds[0]})`);
+  const props = sect('props');
+  check(props.some((l) => /leftmirror\.mesh$/.test(l)) && J2R.readOgreMesh(rv.files.find((f) => /leftmirror\.mesh$/.test(f.path)).data).submeshes[0].material === 'mirror', 'mirror glass becomes a RoR leftmirror prop using the material "mirror"');
+  const steerI = props.findIndex((l) => /source: steeringwheel/.test(l));
+  check(steerI > 0 && /^add_animation -450\.0000, /.test(props[steerI]), 'steering wheel turns with the steering (default 450 degree lock)');
+  // RoR prop maths: X axis of F * Rz * Ry must be the wheel's spin axis (BeamNG y = backward -> RoR -z)
+  const pa = props[steerI - 1].split(/\s*,\s*/).map(Number);
+  const pdx = sub3(nodePos[pa[1]], nodePos[pa[0]]), pdy = sub3(nodePos[pa[2]], nodePos[pa[0]]);
+  const pn = nz3(cr3(pdy, pdx)), prx = nz3(pdx), pry = cr3(prx, pn);
+  const yr = pa[7] * Math.PI / 180, zr = pa[8] * Math.PI / 180;
+  const lx = [Math.cos(zr) * Math.cos(yr), Math.sin(zr) * Math.cos(yr), -Math.sin(yr)];
+  const axisW = [0, 1, 2].map((i) => prx[i] * lx[0] + pn[i] * lx[1] + pry[i] * lx[2]);
+  const pivotW = [0, 1, 2].map((i) => nodePos[pa[0]][i] + pa[3] * pdx[i] + pa[4] * pdy[i] + pa[5] * pn[i]);
+  check(Math.abs(axisW[2] + 1) < 1e-3 && Math.hypot(pivotW[0] - 0.3, pivotW[1] - 0.8, pivotW[2] - 0.5) < 1e-3, `prop turns around its real axis ${axisW.map((v) => v.toFixed(3))} through its pivot ${pivotW.map((v) => v.toFixed(3))}`);
+  check(props.some((l) => /source: speedo/.test(l)), 'speedometer needle follows the speed');
+  const lastNode = rv.truck.split('\n').filter((l) => /^\d+, -?[\d.]+, -?[\d.]+, -?[\d.]+, l/.test(l)).pop();
+  check(/, lcx, [\d.]+ ;j2r_exhaust$/.test(lastNode) && sect('exhausts').length === 1, 'engine sound and smoke at the tailpipe: the exhaust node is the last node (RoR keeps only the last one)');
   check(/colour_write off/.test(rv.files.find((f) => /\.material$/.test(f.path) && !/-model/.test(f.path)).data), 'plain body panels hidden when the model is present');
 
   // Textures: BC7 (DX10 header) is re-encoded to DXT for RoR's Direct3D 9 renderer

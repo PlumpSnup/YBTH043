@@ -27,6 +27,11 @@ node cli.js path/to/mod.zip --extra "path/to/BeamNG.drive/content/vehicles/commo
 | other `hydros` | rigid beams |
 | `triangles` / `quadTriangles` | `submesh` / `cab` (collision; hidden when the 3D model is included) |
 | `flexbodies` + `.dae` models | `flexbodies` + `forset`, one OGRE `.mesh` (v1.100) per part, placed with RoR's own FlexBody maths |
+| wheel meshes (rims, hubcaps, drums) | flexbodies on the tread nodes RoR generates for each wheel (numbered after the declared and cinecam nodes), so they spin; a tyre mesh is built to fit the rim |
+| `props` (steering wheel, needles, pedals) | `props` + `add_animation` (steeringwheel, speedo, tacho, accel, brakes, clutch, parking); the prop's X axis is pointed along its real spin axis |
+| glass/mesh with material `mirror` | `leftmirror` / `rightmirror` props: working rear-view mirrors |
+| `glowMap` lamps | `flares2` at each lamp lens (headlights, brake, tail, reverse, indicators) + `materialflarebindings` so lenses glow |
+| exhaust parts | an extra last node marked `x` (engine sound position) + `exhausts` (smoke) |
 | `*.materials.json` | OGRE `.material` (colour texture, paint colour, glass transparency, double-sided); `glowMap` lights use their "off" look |
 | `pressureWheels`, `hubWheels`… | `wheels` (radius, width, rays, mass, pressure-based stiffness, brakes) |
 | `powertrain` (engine torque curve, gearbox, differentials, `connectedWheel`) | `engine`, `engoption`, `torquecurve`, driven wheels |
@@ -36,7 +41,7 @@ node cli.js path/to/mod.zip --extra "path/to/BeamNG.drive/content/vehicles/commo
 
 **No BeamNG install needed for most mods.** Tires and wheels that a mod borrows from the base game are rebuilt from their part names (`tire_F_175_70_13` = 175 mm wide, 70 % sidewall, 13-inch rim; base-game wheels reuse the mod's own wheel for the node layout). Lights, sounds and seats from the base game are skipped since they don't affect physics.
 
-Not converted: wheel/rim meshes (RoR draws its own wheels for now), normal/roughness maps, `props` (steering wheel, gauge needles), lights, sounds, Lua controllers (ABS, ESC, electrics) and torsion bars (anti-roll bars).
+Not converted: normal/roughness maps, BeamNG's own sounds (RoR's car sounds are used), opening doors/hood/trunk, wipers, Lua controllers (ABS, ESC, electrics) and torsion bars (anti-roll bars).
 
 ## Why it shouldn't break
 
