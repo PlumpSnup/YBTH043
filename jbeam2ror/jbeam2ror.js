@@ -1448,7 +1448,7 @@
     let exhaustDir = null;
     {
       const ex = [...nodes.values()].filter((nd) => nd.groups.some((gname) => /exhaust|muffler|tailpipe/i.test(gname)));
-      if (ex.length >= 2 && !nodes.has('j2r_exhaust')) {
+      if (!opts.noExhaust && ex.length >= 2 && !nodes.has('j2r_exhaust')) {
         const back = (nd) => -v3.dot(nd.pos, fwd);
         const tip = ex.reduce((a, b) => (back(b) > back(a) ? b : a));
         const prev = ex.filter((nd) => nd !== tip).reduce((a, b) => (v3.len(v3.sub(b.pos, tip.pos)) < v3.len(v3.sub(a.pos, tip.pos)) ? b : a));
@@ -1467,8 +1467,8 @@
     const N = (id) => (id === '9999' ? '9999' : String(idx.get(String(id))));
 
     const title = (opts.title || `${veh.title || veh.model}${pc ? ' (' + pc.name + ')' : ''}`).replace(/[\r\n;]/g, ' ').trim() || 'Converted vehicle';
-    const titleTagged = `${title} [j2r ${CONVERTER_VERSION}${X ? ' test ' + X : ''}]`;
-    const fileBase = (veh.model + (pc ? '_' + pc.name : '') + (X ? '_test' + X : '')).replace(/[^A-Za-z0-9_\-]+/g, '_');
+    const titleTagged = `${title} [j2r ${CONVERTER_VERSION}${X ? ' test ' + X : ''}${opts.tag ? ' ' + opts.tag : ''}]`;
+    const fileBase = (veh.model + (pc ? '_' + pc.name : '') + (X ? '_test' + X : '') + (opts.tag ? '_' + opts.tag : '')).replace(/[^A-Za-z0-9_\-]+/g, '_');
     const matName = `jbeam2ror/${fileBase}/body`;
     const SAFE_DEFAULTS = 'set_beam_defaults 9000000, 12000, 1000000000, 1000000000';
     const L = [];
@@ -2764,6 +2764,7 @@
       // Wheel parts (rims, hubcaps, discs, drums): every group belongs to a wheel, so they
       // go on the tread nodes RoR builds for that wheel and spin with it.
       let wheel = null;
+      if (opts.skipWheels && fb.groups.length && fb.groups.every(wheelish)) { skippedWheel.push(fb.mesh); continue; }
       if (fb.groups.length && fb.groups.every(wheelish)) {
         wheel = fb.groups.map(wheelOf).find(Boolean) || null;
         if (!wheel) { skippedWheel.push(fb.mesh); continue; }
@@ -2997,7 +2998,7 @@
     }
     const toR = (x, y, z) => [x, z, -y];
     const rearward = [-plan.fwd[0], -plan.fwd[1], -plan.fwd[2]];
-    for (const pr of plan.props || []) {
+    for (const pr of opts.skipProps ? [] : plan.props || []) {
       const e = owner.get(pr.mesh);
       const item = e ? daeFor(e).meshes.get(pr.mesh) : null;
       if (!item) { propNotes.push(pr.mesh); continue; }
@@ -3043,7 +3044,7 @@
 
     // Mirrors: BeamNG mirror glass uses the material "mirror", like RoR. A RoR prop whose
     // mesh name contains leftmirror/rightmirror and uses that material shows the view behind.
-    for (const [side, tris] of Object.entries(mirrorTris)) {
+    for (const [side, tris] of Object.entries(opts.skipMirrors ? {} : mirrorTris)) {
       if (!tris.length) continue;
       const pos = [], nrm = [], uv = [], idx = [];
       let cen = [0, 0, 0], an = [0, 0, 0];
@@ -3069,7 +3070,7 @@
     const along = (p) => dot(sub(p, carCenter), plan.fwd);
     let nFlares = 0;
     const flareTypesOrder = ['f', 'h', 'g', 't', 'b', 'R', 'l', 'r'];
-    for (const type of flareTypesOrder) {
+    for (const type of opts.skipLights ? [] : flareTypesOrder) {
       const tris = lightTris.get(type) || [];
       const clusters = new Map();
       // one lamp per material and side (a material can cover both headlights) ...
@@ -3161,8 +3162,14 @@
       let data;
       try { data = await entry.read(); } catch (err) { note(`Texture ${entry.path} could not be read: ${err.message}`); continue; }
       try {
-        const b2 = bake ? { mask: await bake.mask.read(), paint: bake.paint } : null;
-        const out = convertTexture(data, entry.path, b2, opts.maxTextureSize || 2048);
+        const ckey = `${entry.path}|${bake ? bake.mask.path + '|' + bake.paint.join(',') : ''}|${opts.maxTextureSize || 2048}`;
+        lib._texCache = lib._texCache || new Map();
+        let out = lib._texCache.get(ckey);
+        if (!out) {
+          const b2 = bake ? { mask: await bake.mask.read(), paint: bake.paint } : null;
+          out = convertTexture(data, entry.path, b2, opts.maxTextureSize || 2048);
+          lib._texCache.set(ckey, out);
+        }
         if (!out.kept) converted++;
         data = out.data;
       } catch (err) { note(`Texture ${entry.path} was copied unchanged (${err.message}); it may show black in RoR.`); }
