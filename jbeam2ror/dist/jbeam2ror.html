@@ -206,7 +206,7 @@ footer p { margin: 0 0 6px; }
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v14';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v15';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -1620,6 +1620,24 @@ footer p { margin: 0 0 6px; }
     L.push('cameras');
     L.push(`${N(ref.ref)}, ${N(ref.back)}, ${N(ref.left)}`);
     L.push('');
+
+    // Air drag. Without a fusedrag section RoR adds turbulent drag to EVERY node
+    // (0.05 * v^2 each). A BeamNG car has ~500 nodes (plus wheel nodes), which adds up to
+    // ~7000 N at 60 km/h: an invisible wall. fusedrag replaces that with one whole-body
+    // drag force, 0.25 * rho * width^2 * v^2 in RoR, so width = sqrt(2 * Cd * A).
+    {
+      const along = (p) => v3.dot(p, fwd), side = (p) => v3.dot(p, left), height = (p) => v3.dot(p, up);
+      const all = [...nodes.values()];
+      const front = all.reduce((a, b) => (along(b.pos) > along(a.pos) ? b : a));
+      const rear = all.reduce((a, b) => (along(b.pos) < along(a.pos) ? b : a));
+      const W = Math.max(...all.map((nd) => side(nd.pos))) - Math.min(...all.map((nd) => side(nd.pos)));
+      const H = Math.max(...all.map((nd) => height(nd.pos))) - Math.min(...all.map((nd) => height(nd.pos)));
+      const cdA = Math.max(0.3, Math.min(3, 0.35 * 0.85 * W * H)); // typical car Cd ~0.35, frontal area ~85 % of the box
+      L.push(`; Whole-body air drag (Cd*A ~ ${cdA.toFixed(2)} m^2) instead of RoR's per-node drag`);
+      L.push('fusedrag');
+      L.push(`${N(front.id)}, ${N(rear.id)}, ${fmt(Math.sqrt(2 * cdA), 3)}`);
+      L.push('');
+    }
 
     // Cinecam (driver view) from BeamNG's internal camera, if present
     const camRow = firstTable('camerasInternal');

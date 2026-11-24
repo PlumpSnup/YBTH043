@@ -7,8 +7,8 @@ const fs = require('fs');
 function validate(text) {
   const errors = [];
   const lines = text.split(/\r?\n/);
-  const minArgs = { nodes: 4, beams: 2, shocks: 7, hydros: 3, wheels: 14, cameras: 3, cinecam: 11, engine: 7, engoption: 1, torquecurve: 2, brakes: 1, globals: 2, minimass: 1, texcoords: 3, cab: 3, slidenodes: 3 };
-  const nodeRefCols = { beams: [0, 1], shocks: [0, 1], hydros: [0, 1], wheels: [3, 4, 5, 8], cameras: [0, 1, 2], cinecam: [3, 4, 5, 6, 7, 8, 9, 10], texcoords: [0], cab: [0, 1, 2] };
+  const minArgs = { nodes: 4, beams: 2, shocks: 7, hydros: 3, wheels: 14, cameras: 3, cinecam: 11, engine: 7, engoption: 1, torquecurve: 2, brakes: 1, globals: 2, minimass: 1, texcoords: 3, cab: 3, slidenodes: 3, fusedrag: 3 };
+  const nodeRefCols = { beams: [0, 1], shocks: [0, 1], hydros: [0, 1], wheels: [3, 4, 5, 8], cameras: [0, 1, 2], cinecam: [3, 4, 5, 6, 7, 8, 9, 10], texcoords: [0], cab: [0, 1, 2], fusedrag: [0, 1] };
   const keywords = new Set([...Object.keys(minArgs), 'submesh', 'end', 'enable_advanced_deformation', 'set_beam_defaults']);
   let section = null, nodeCount = 0, sawTitle = false, ended = false;
   const texNodes = new Set();
