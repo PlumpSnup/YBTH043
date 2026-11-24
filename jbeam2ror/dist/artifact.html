@@ -199,6 +199,7 @@ footer p { margin: 0 0 6px; }
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
+  const CONVERTER_VERSION = 'v9';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // BeamNG defaults (used when a JBeam file does not set a value).
   const BNG = {
@@ -1547,11 +1548,12 @@ footer p { margin: 0 0 6px; }
     const N = (id) => (id === '9999' ? '9999' : String(idx.get(String(id))));
 
     const title = (opts.title || `${veh.title || veh.model}${pc ? ' (' + pc.name + ')' : ''}`).replace(/[\r\n;]/g, ' ').trim() || 'Converted vehicle';
+    const titleTagged = `${title} [j2r ${CONVERTER_VERSION}]`;
     const fileBase = (veh.model + (pc ? '_' + pc.name : '')).replace(/[^A-Za-z0-9_\-]+/g, '_');
     const matName = `jbeam2ror/${fileBase}/body`;
     const SAFE_DEFAULTS = 'set_beam_defaults 9000000, 12000, 1000000000, 1000000000';
     const L = [];
-    L.push(title);
+    L.push(titleTagged);
     L.push('');
     L.push(`; Converted from BeamNG.drive JBeam by jbeam2ror`);
     L.push(`; Source vehicle: ${veh.model}${pc ? ', configuration ' + pc.name : ''}`);
@@ -2204,7 +2206,7 @@ footer p { margin: 0 0 6px; }
     }));
   }
 
-  const api = { _stabilizeModes: stabilizeModes, _simulateDrop: simulateDrop, parseJBeam, evalExpression, openZip, makeZip, loadLibrary, listVehicles, convert, buildModZip, filesToEntries, crc32 };
+  const api = { version: CONVERTER_VERSION, _stabilizeModes: stabilizeModes, _simulateDrop: simulateDrop, parseJBeam, evalExpression, openZip, makeZip, loadLibrary, listVehicles, convert, buildModZip, filesToEntries, crc32 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.J2R = api;
 })(typeof self !== 'undefined' ? self : this);
