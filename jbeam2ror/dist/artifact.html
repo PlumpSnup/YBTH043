@@ -199,7 +199,7 @@ footer p { margin: 0 0 6px; }
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v11';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v12';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -207,7 +207,7 @@ footer p { margin: 0 0 6px; }
     A: 'Soft limits: suspension/driveshaft limiters keep their normal stiffness past the limit',
     B: 'No slidenodes: strut spring seats and the steering rack are not slide-constrained',
     C: 'Even heavier wheels: 2x the default wheel mass',
-    D: 'No traction control',
+    D: 'Traction control on',
     E: 'Fixed steering: steering hydros become plain beams',
   };
 
@@ -1405,7 +1405,9 @@ footer p { margin: 0 0 6px; }
       if (!(finalDrive > 1)) { finalDrive = 3.7; warn('Final drive ratio not found; using 3.7'); }
       const isElectric = /electric/i.test(engineDev.type);
       const shiftUp = Math.max(idle + 1500, maxRPM * 0.9);
-      const shiftDown = Math.max(idle + 300, shiftUp * 0.45);
+      // RoR uses the shift-down rpm both for downshifts and as the rpm above which its
+      // automatic clutch bites; too high and the car revs for seconds before moving off.
+      const shiftDown = Math.max(idle + 500, shiftUp * 0.3);
       // RoR's clutch is a spring between engine and wheel speed: torque = clutchForce * (rpm
       // difference). On slipping light car wheels RoR's defaults (5000-10000) overshoot every
       // physics step, so the torque slams between +max and -max and the wheels shake apart.
@@ -1679,8 +1681,8 @@ footer p { margin: 0 0 6px; }
       L.push('engine');
       L.push(`${fmt(engine.shiftDown)}, ${fmt(engine.shiftUp)}, ${fmt(engine.torque)}, ${fmt(engine.finalDrive, 3)}, ${fmt(engine.reverse, 3)}, 1, ${engine.gears.map((g) => fmt(g, 3)).join(', ')}, -1`);
       L.push('');
-      if (X !== 'D') {
-        L.push('; Traction control: stops wheelspin from shaking the light tyre nodes apart (toggle in RoR)');
+      if (X === 'D') {
+        L.push('; Traction control (test build D)');
         L.push('TractionControl 2, 0.25, 1, 20, mode: ON');
         L.push('');
       }
@@ -1895,6 +1897,31 @@ footer p { margin: 0 0 6px; }
       }
       // RoR engine + clutch (Engine::UpdateEngine / CalcDifferentials), full throttle in one gear
       let engT = 0;
+      if (extra.rorEngine && s * dt > 1) {
+        // exact port of RoR's engine + automatic gearbox (passed in), fed with RoR-style wheel spin
+        const re = extra.rorEngine;
+        let spin = 0, nw = 0;
+        for (const wr of wheelRings) {
+          if (!wr.w.propulsed) continue;
+          const a3 = wr.a * 3, b3 = wr.b * 3;
+          const ax = v3.norm([pos[b3] - pos[a3], pos[b3 + 1] - pos[a3 + 1], pos[b3 + 2] - pos[a3 + 2]]);
+          let sp = 0;
+          for (let q = 0; q < wr.count; q++) {
+            const o = wr.base + q, inner = (q % 2) ? wr.b : wr.a;
+            const r = [pos[o * 3] - pos[inner * 3], pos[o * 3 + 1] - pos[inner * 3 + 1], pos[o * 3 + 2] - pos[inner * 3 + 2]];
+            const d = v3.scale(v3.cross(ax, r), 1 / (v3.len(r) || 1));
+            sp += (vel[o * 3] - vel[inner * 3]) * d[0] + (vel[o * 3 + 1] - vel[inner * 3 + 1]) * d[1] + (vel[o * 3 + 2] - vel[inner * 3 + 2]) * d[2];
+          }
+          wr.speed = sp / wr.count;
+          spin += wr.speed / wr.w.radius; nw++;
+        }
+        re.wheel = (spin / Math.max(1, nw)) * 60 / (2 * Math.PI);
+        const fwd = extra.fwd || [0, 0, 1];
+        re.ref = (vel[0] * fwd[0] + vel[1] * fwd[1] + vel[2] * fwd[2]) / (wheels[0] ? wheels[0].radius : 0.3) * 60 / (2 * Math.PI);
+        re.step(dt, s % 33 === 0, s * dt);
+        engT = re.clutchT / Math.max(1, nw);
+        if (s % 200 === 0) re.log.push([+(s * dt).toFixed(1), re.gear, Math.round(re.rpm), Math.round((vel[0] * fwd[0] + vel[1] * fwd[1] + vel[2] * fwd[2]) * 3.6), +re.clutch.toFixed(2)]);
+      }
       if (extra.drive && s * dt > 1) {
         const dv = extra.drive;
         if (eng.rpm === undefined) eng.rpm = dv.idle;
@@ -1933,8 +1960,8 @@ footer p { margin: 0 0 6px; }
         if (s % 400 === 0) eng.log.push([+(s * dt).toFixed(1), eng.gear === undefined ? 1 : eng.gear + 1, Math.round(eng.rpm), Math.round(wheelRpm), Math.round(engT)]);
       }
       // drive torque on driven wheels, as RoR's CalcWheels (plus the reaction on the arm node)
-      if ((extra.torque || extra.drive) && s * dt > 1) {
-        const T0 = extra.drive ? engT : extra.torque * Math.min(1, (s * dt - 1) / 0.3);
+      if ((extra.torque || extra.drive || extra.rorEngine) && s * dt > 1) {
+        const T0 = (extra.drive || extra.rorEngine) ? engT : extra.torque * Math.min(1, (s * dt - 1) / 0.3);
         // RoR traction control (ActorForcesEuler: pulse timer, slip > 0.25, coef = (v/w)^ratio)
         if (extra.tc) {
           eng.tcTimer = (eng.tcTimer || 0) + dt;
