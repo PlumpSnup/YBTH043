@@ -199,14 +199,14 @@ footer p { margin: 0 0 6px; }
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v10';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v11';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
   const EXPERIMENTS = {
     A: 'Soft limits: suspension/driveshaft limiters keep their normal stiffness past the limit',
     B: 'No slidenodes: strut spring seats and the steering rack are not slide-constrained',
-    C: 'Heavier wheels: 2.5x wheel mass (sturdier tyres)',
+    C: 'Even heavier wheels: 2x the default wheel mass',
     D: 'No traction control',
     E: 'Fixed steering: steering hydros become plain beams',
   };
@@ -1287,6 +1287,7 @@ footer p { margin: 0 0 6px; }
     }
 
     const wheels = [];
+    let addedWheelMass = 0;
     const lateral = v3.cross(up, fwd); // RoR spins wheels forward when axis = up x forward
     for (const w of wheelDefs.values()) {
       const p = w.props;
@@ -1305,8 +1306,14 @@ footer p { margin: 0 0 6px; }
       const rays = Math.round(Math.min(12, Math.max(8, num(p.numRays, 12))));
       const tireW = num(p.nodeWeight, 0.35), hubW = num(p.hubNodeWeight, 0.6);
       const bngRays = Math.round(Math.min(64, Math.max(6, num(p.numRays, 16))));
-      let mass = 2 * bngRays * (tireW + hubW) * (X === 'C' ? 2.5 : 1); // BeamNG's wheel mass (hub + tyre nodes)
+      let mass = 2 * bngRays * (tireW + hubW) * (X === 'C' ? 2 : 1); // BeamNG's wheel mass (hub + tyre nodes)
       mass = Math.min(200, Math.max(4, mass));
+      // Tested in RoR 2026.01: tyre nodes under ~2 kg shake apart in the game (the game's
+      // tyre contact is harsher than any model we could check against), while 2.2 kg holds.
+      // Make the wheel at least that heavy; the extra is taken off the body below so the
+      // car keeps BeamNG's total weight.
+      const minTread = 2.2 * 2 * rays;
+      if (mass < minTread) { addedWheelMass += minTread - mass; mass = minTread; }
       const nodeMass = mass / (2 * rays);
       const psi = num(p.pressurePSI, 30);
       const { spring, damp } = rorTyre(nodeMass, radius, Math.min(1.2e6, Math.max(1.5e5, 13000 * psi)));
@@ -1318,6 +1325,14 @@ footer p { margin: 0 0 6px; }
         braked, propulsed: driven.has(w.name) ? 1 : 0, brakeTorque, parkTorque,
         center: v3.mid(nodes.get(n1).pos, nodes.get(n2).pos),
       });
+    }
+    if (addedWheelMass > 0) {
+      // Keep the vehicle's total weight: take the wheels' extra mass off the body nodes
+      // (the stability pass below re-checks every node afterwards).
+      const body = [...nodes.values()].reduce((s2, nd) => s2 + nd.weight, 0);
+      const f = body > addedWheelMass * 4 ? (body - addedWheelMass) / body : 1;
+      if (f < 1) for (const nd of nodes.values()) nd.weight *= f;
+      warn(`Wheels made heavier for RoR (+${addedWheelMass.toFixed(0)} kg in total, ${f < 1 ? 'taken off the body so the total weight is unchanged' : 'added to the total'}): light tyres shake apart in RoR.`);
     }
     if (wheels.length > ROR_MAX_WHEELS) { warn(`RoR supports at most ${ROR_MAX_WHEELS} wheels; extra wheels dropped`); wheels.length = ROR_MAX_WHEELS; }
     if (!wheels.length) warn('No wheels were found in this configuration');
@@ -1670,8 +1685,9 @@ footer p { margin: 0 0 6px; }
         L.push('');
       }
       L.push('engoption');
-      L.push('; inertia, type, clutch force (both tuned so the engine/clutch/wheel loop is stable at RoR\'s 2000 Hz step)');
-      L.push(`${fmt(engine.inertia, 4)}, ${engine.type}, ${engine.clutchForce}`);
+      L.push('; inertia, type, clutch force (tuned so the engine/clutch/wheel loop is stable at RoR\'s 2000 Hz step), shift time, clutch time, post-shift time');
+      // shift time 0.3 s, clutch time 0.15 s, post-shift 0.1 s (RoR defaults 0.5/0.2/0.2 lose too much speed in a small car)
+      L.push(`${fmt(engine.inertia, 4)}, ${engine.type}, ${engine.clutchForce}, 0.3, 0.15, 0.1`);
       L.push('');
       if (engine.curve.length >= 2) {
         L.push('torquecurve');
