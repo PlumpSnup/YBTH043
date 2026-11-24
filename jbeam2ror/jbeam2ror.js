@@ -18,7 +18,7 @@
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v12';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v13';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -28,7 +28,12 @@
     C: 'Even heavier wheels: 2x the default wheel mass',
     D: 'Traction control on',
     E: 'Fixed steering: steering hydros become plain beams',
+    F: 'Stronger clutch: RoR\'s default car clutch strength (5000)',
+    G: 'Heavier flywheel: engine inertia 10x (revs change more slowly)',
+    H: 'RoR\'s own gearbox defaults (no clutch, flywheel or shift-time tuning)',
   };
+  // The builds offered in the test pack right now (the wheel tests A-E are settled)
+  const PACK = ['D', 'F', 'G', 'H'];
 
   // BeamNG defaults (used when a JBeam file does not set a value).
   const BNG = {
@@ -1236,9 +1241,9 @@
       // enough that the engine side of the clutch loop is stable in top gear too.
       const drivenW = wheels.filter((w) => w.propulsed);
       const Iw = drivenW.reduce((s2, w) => s2 + w.mass * w.radius * w.radius, 0) || 2;
-      const clutchForce = Math.round(Math.max(80, Math.min(5000, 0.5 * Iw / (PHYSICS_DT * 9.5493))));
+      const clutchForce = X === 'F' ? 5000 : Math.round(Math.max(80, Math.min(5000, 0.5 * Iw / (PHYSICS_DT * 9.5493))));
       const Gtop = Math.min(...fwdGears) * finalDrive;
-      const inertia = Math.max(num(ed.inertia, 0.15) / 9.5493, 0.6 * clutchForce * PHYSICS_DT / (Gtop * Gtop * 0.5), 0.02);
+      const inertia = Math.max(num(ed.inertia, 0.15) / 9.5493, 0.6 * clutchForce * PHYSICS_DT / (Gtop * Gtop * 0.5), 0.02) * (X === 'G' ? 10 : 1);
       engine = {
         clutchForce, inertia: +inertia.toFixed(4),
         shiftDown, shiftUp, torque: maxT, finalDrive, reverse, gears: fwdGears, idle,
@@ -1508,7 +1513,7 @@
       L.push('engoption');
       L.push('; inertia, type, clutch force (tuned so the engine/clutch/wheel loop is stable at RoR\'s 2000 Hz step), shift time, clutch time, post-shift time');
       // shift time 0.3 s, clutch time 0.15 s, post-shift 0.1 s (RoR defaults 0.5/0.2/0.2 lose too much speed in a small car)
-      L.push(`${fmt(engine.inertia, 4)}, ${engine.type}, ${engine.clutchForce}, 0.3, 0.15, 0.1`);
+      L.push(X === 'H' ? `1, ${engine.type}` : `${fmt(engine.inertia, 4)}, ${engine.type}, ${engine.clutchForce}, 0.3, 0.15, 0.1`);
       L.push('');
       if (engine.curve.length >= 2) {
         L.push('torquecurve');
@@ -2083,7 +2088,7 @@
     }));
   }
 
-  const api = { version: CONVERTER_VERSION, experiments: EXPERIMENTS, _stabilizeModes: stabilizeModes, _simulateDrop: simulateDrop, parseJBeam, evalExpression, openZip, makeZip, loadLibrary, listVehicles, convert, buildModZip, filesToEntries, crc32 };
+  const api = { version: CONVERTER_VERSION, experiments: EXPERIMENTS, pack: PACK, _stabilizeModes: stabilizeModes, _simulateDrop: simulateDrop, parseJBeam, evalExpression, openZip, makeZip, loadLibrary, listVehicles, convert, buildModZip, filesToEntries, crc32 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.J2R = api;
 })(typeof self !== 'undefined' ? self : this);

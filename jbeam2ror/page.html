@@ -131,7 +131,7 @@ footer p { margin: 0 0 6px; }
               <label class="btn" for="modDir">Choose folder<input type="file" id="modDir" webkitdirectory multiple></label>
             </div>
             <span class="picked" id="modName"></span>
-            <div class="row" id="physRow" hidden><button type="button" id="physBtn">Save physics files only</button><button type="button" id="listBtn">Save file list</button><span class="status" id="physStatus"></span></div>
+            <div class="row" id="physRow" hidden><button type="button" id="physBtn">Save physics files only</button><button type="button" id="listBtn">Save file list</button><button type="button" id="modelBtn">Save 3D model report</button><span class="status" id="physStatus"></span></div>
           </div>
         </div>
       </div>
@@ -339,7 +339,7 @@ footer p { margin: 0 0 6px; }
       <details><summary>Troubleshooting: download a test pack</summary>
         <div style="padding:0 12px 12px;display:grid;gap:8px;font-size:14px">
           <p style="margin:0">If the car is unstable in RoR, this zip contains the normal build plus test builds that each change one thing. They show up separately in RoR's vehicle list, named <code>[j2r ${esc(J2R.version)} test A]</code> and so on. Spawn each, leave it for 20 seconds, and note which ones stay in one piece.</p>
-          <ul class="notes">${Object.entries(J2R.experiments).map(([k, v]) => `<li><b>Test ${k}</b>: ${esc(v)}</li>`).join('')}</ul>
+          <ul class="notes">${J2R.pack.map((k) => `<li><b>Test ${k}</b>: ${esc(J2R.experiments[k])}</li>`).join('')}</ul>
           <div class="row"><button type="button" id="packBtn">Download test pack</button><span class="status" id="packStatus"></span></div>
         </div>
       </details>
@@ -355,7 +355,7 @@ footer p { margin: 0 0 6px; }
   async function savePack() {
     const msg = $('packStatus');
     const files = [];
-    const keys = [null, ...Object.keys(J2R.experiments)];
+    const keys = [null, ...J2R.pack];
     for (let i = 0; i < keys.length; i++) {
       msg.textContent = `Building ${i + 1} of ${keys.length}…`;
       await new Promise((res) => setTimeout(res, 20));
@@ -395,6 +395,36 @@ footer p { margin: 0 0 6px; }
     const lines = state.mod.entries.map((e) => `${String(e.size ?? '').padStart(10)}  ${e.path}`).sort((a, b) => a.slice(12).localeCompare(b.slice(12)));
     const base = String(state.mod.name || 'mod').replace(/\.zip$/i, '').replace(/[^A-Za-z0-9_\-]+/g, '_');
     await saveFile(`${base}_file_list.txt`, `${lines.length} files\n${lines.join('\n')}\n`, msg, `${lines.length} files listed`);
+  });
+
+  // A small zip describing the mod's 3D content: file list, material definitions and the
+  // first part of a few model files, so the formats can be checked without the full mod.
+  $('modelBtn').addEventListener('click', async () => {
+    const msg = $('physStatus');
+    msg.textContent = 'Collecting…';
+    try {
+      const entries = state.mod.entries;
+      const files = [];
+      const list = entries.map((e) => `${String(e.size ?? '').padStart(10)}  ${e.path}`).sort((a, b) => a.slice(12).localeCompare(b.slice(12)));
+      files.push({ path: 'file_list.txt', data: list.join('\n') + '\n' });
+      let budget = 3 * 1048576;
+      const take = async (e, max, prefix) => {
+        if (budget <= 0) return;
+        const all = await e.read();
+        const part = all.subarray(0, Math.min(all.length, max, budget));
+        budget -= part.length;
+        files.push({ path: prefix + e.path, data: part });
+      };
+      for (const e of entries.filter((x) => /materials?\.(json|cs)$/i.test(x.path) || /\.materials\.json$/i.test(x.path))) await take(e, 600000, 'materials/');
+      const meshes = entries.filter((x) => /\.(dae|cdae|dts|cached\.dts)$/i.test(x.path)).sort((a, b) => (b.size || 0) - (a.size || 0));
+      for (const e of meshes.slice(0, 4)) await take(e, 300000, 'model_samples/');
+      const tex = entries.filter((x) => /\.(dds|png|jpg|jpeg|tga)$/i.test(x.path)).slice(0, 6);
+      for (const e of tex) await take(e, 256, 'texture_headers/');
+      const bytes = J2R.makeZip(files);
+      const base = String(state.mod.name || 'mod').replace(/\.zip$/i, '').replace(/[^A-Za-z0-9_\-]+/g, '_');
+      msg.textContent = '';
+      await saveFile(`${base}_3d_report.zip`, bytes, msg, `${(bytes.length / 1048576).toFixed(2)} MB, ${meshes.length} model files found`);
+    } catch (err) { msg.textContent = `Couldn't build the report: ${err.message}`; }
   });
 
   async function saveFile(filename, bytes, msg, savedNote) {

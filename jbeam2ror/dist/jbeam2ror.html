@@ -138,7 +138,7 @@ footer p { margin: 0 0 6px; }
               <label class="btn" for="modDir">Choose folder<input type="file" id="modDir" webkitdirectory multiple></label>
             </div>
             <span class="picked" id="modName"></span>
-            <div class="row" id="physRow" hidden><button type="button" id="physBtn">Save physics files only</button><button type="button" id="listBtn">Save file list</button><span class="status" id="physStatus"></span></div>
+            <div class="row" id="physRow" hidden><button type="button" id="physBtn">Save physics files only</button><button type="button" id="listBtn">Save file list</button><button type="button" id="modelBtn">Save 3D model report</button><span class="status" id="physStatus"></span></div>
           </div>
         </div>
       </div>
@@ -206,7 +206,7 @@ footer p { margin: 0 0 6px; }
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v12';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v13';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -216,7 +216,12 @@ footer p { margin: 0 0 6px; }
     C: 'Even heavier wheels: 2x the default wheel mass',
     D: 'Traction control on',
     E: 'Fixed steering: steering hydros become plain beams',
+    F: 'Stronger clutch: RoR\'s default car clutch strength (5000)',
+    G: 'Heavier flywheel: engine inertia 10x (revs change more slowly)',
+    H: 'RoR\'s own gearbox defaults (no clutch, flywheel or shift-time tuning)',
   };
+  // The builds offered in the test pack right now (the wheel tests A-E are settled)
+  const PACK = ['D', 'F', 'G', 'H'];
 
   // BeamNG defaults (used when a JBeam file does not set a value).
   const BNG = {
@@ -1424,9 +1429,9 @@ footer p { margin: 0 0 6px; }
       // enough that the engine side of the clutch loop is stable in top gear too.
       const drivenW = wheels.filter((w) => w.propulsed);
       const Iw = drivenW.reduce((s2, w) => s2 + w.mass * w.radius * w.radius, 0) || 2;
-      const clutchForce = Math.round(Math.max(80, Math.min(5000, 0.5 * Iw / (PHYSICS_DT * 9.5493))));
+      const clutchForce = X === 'F' ? 5000 : Math.round(Math.max(80, Math.min(5000, 0.5 * Iw / (PHYSICS_DT * 9.5493))));
       const Gtop = Math.min(...fwdGears) * finalDrive;
-      const inertia = Math.max(num(ed.inertia, 0.15) / 9.5493, 0.6 * clutchForce * PHYSICS_DT / (Gtop * Gtop * 0.5), 0.02);
+      const inertia = Math.max(num(ed.inertia, 0.15) / 9.5493, 0.6 * clutchForce * PHYSICS_DT / (Gtop * Gtop * 0.5), 0.02) * (X === 'G' ? 10 : 1);
       engine = {
         clutchForce, inertia: +inertia.toFixed(4),
         shiftDown, shiftUp, torque: maxT, finalDrive, reverse, gears: fwdGears, idle,
@@ -1696,7 +1701,7 @@ footer p { margin: 0 0 6px; }
       L.push('engoption');
       L.push('; inertia, type, clutch force (tuned so the engine/clutch/wheel loop is stable at RoR\'s 2000 Hz step), shift time, clutch time, post-shift time');
       // shift time 0.3 s, clutch time 0.15 s, post-shift 0.1 s (RoR defaults 0.5/0.2/0.2 lose too much speed in a small car)
-      L.push(`${fmt(engine.inertia, 4)}, ${engine.type}, ${engine.clutchForce}, 0.3, 0.15, 0.1`);
+      L.push(X === 'H' ? `1, ${engine.type}` : `${fmt(engine.inertia, 4)}, ${engine.type}, ${engine.clutchForce}, 0.3, 0.15, 0.1`);
       L.push('');
       if (engine.curve.length >= 2) {
         L.push('torquecurve');
@@ -2271,7 +2276,7 @@ footer p { margin: 0 0 6px; }
     }));
   }
 
-  const api = { version: CONVERTER_VERSION, experiments: EXPERIMENTS, _stabilizeModes: stabilizeModes, _simulateDrop: simulateDrop, parseJBeam, evalExpression, openZip, makeZip, loadLibrary, listVehicles, convert, buildModZip, filesToEntries, crc32 };
+  const api = { version: CONVERTER_VERSION, experiments: EXPERIMENTS, pack: PACK, _stabilizeModes: stabilizeModes, _simulateDrop: simulateDrop, parseJBeam, evalExpression, openZip, makeZip, loadLibrary, listVehicles, convert, buildModZip, filesToEntries, crc32 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.J2R = api;
 })(typeof self !== 'undefined' ? self : this);
@@ -2647,7 +2652,7 @@ else root.J2R_SAMPLE = { buildSample };
       <details><summary>Troubleshooting: download a test pack</summary>
         <div style="padding:0 12px 12px;display:grid;gap:8px;font-size:14px">
           <p style="margin:0">If the car is unstable in RoR, this zip contains the normal build plus test builds that each change one thing. They show up separately in RoR's vehicle list, named <code>[j2r ${esc(J2R.version)} test A]</code> and so on. Spawn each, leave it for 20 seconds, and note which ones stay in one piece.</p>
-          <ul class="notes">${Object.entries(J2R.experiments).map(([k, v]) => `<li><b>Test ${k}</b>: ${esc(v)}</li>`).join('')}</ul>
+          <ul class="notes">${J2R.pack.map((k) => `<li><b>Test ${k}</b>: ${esc(J2R.experiments[k])}</li>`).join('')}</ul>
           <div class="row"><button type="button" id="packBtn">Download test pack</button><span class="status" id="packStatus"></span></div>
         </div>
       </details>
@@ -2663,7 +2668,7 @@ else root.J2R_SAMPLE = { buildSample };
   async function savePack() {
     const msg = $('packStatus');
     const files = [];
-    const keys = [null, ...Object.keys(J2R.experiments)];
+    const keys = [null, ...J2R.pack];
     for (let i = 0; i < keys.length; i++) {
       msg.textContent = `Building ${i + 1} of ${keys.length}…`;
       await new Promise((res) => setTimeout(res, 20));
@@ -2703,6 +2708,36 @@ else root.J2R_SAMPLE = { buildSample };
     const lines = state.mod.entries.map((e) => `${String(e.size ?? '').padStart(10)}  ${e.path}`).sort((a, b) => a.slice(12).localeCompare(b.slice(12)));
     const base = String(state.mod.name || 'mod').replace(/\.zip$/i, '').replace(/[^A-Za-z0-9_\-]+/g, '_');
     await saveFile(`${base}_file_list.txt`, `${lines.length} files\n${lines.join('\n')}\n`, msg, `${lines.length} files listed`);
+  });
+
+  // A small zip describing the mod's 3D content: file list, material definitions and the
+  // first part of a few model files, so the formats can be checked without the full mod.
+  $('modelBtn').addEventListener('click', async () => {
+    const msg = $('physStatus');
+    msg.textContent = 'Collecting…';
+    try {
+      const entries = state.mod.entries;
+      const files = [];
+      const list = entries.map((e) => `${String(e.size ?? '').padStart(10)}  ${e.path}`).sort((a, b) => a.slice(12).localeCompare(b.slice(12)));
+      files.push({ path: 'file_list.txt', data: list.join('\n') + '\n' });
+      let budget = 3 * 1048576;
+      const take = async (e, max, prefix) => {
+        if (budget <= 0) return;
+        const all = await e.read();
+        const part = all.subarray(0, Math.min(all.length, max, budget));
+        budget -= part.length;
+        files.push({ path: prefix + e.path, data: part });
+      };
+      for (const e of entries.filter((x) => /materials?\.(json|cs)$/i.test(x.path) || /\.materials\.json$/i.test(x.path))) await take(e, 600000, 'materials/');
+      const meshes = entries.filter((x) => /\.(dae|cdae|dts|cached\.dts)$/i.test(x.path)).sort((a, b) => (b.size || 0) - (a.size || 0));
+      for (const e of meshes.slice(0, 4)) await take(e, 300000, 'model_samples/');
+      const tex = entries.filter((x) => /\.(dds|png|jpg|jpeg|tga)$/i.test(x.path)).slice(0, 6);
+      for (const e of tex) await take(e, 256, 'texture_headers/');
+      const bytes = J2R.makeZip(files);
+      const base = String(state.mod.name || 'mod').replace(/\.zip$/i, '').replace(/[^A-Za-z0-9_\-]+/g, '_');
+      msg.textContent = '';
+      await saveFile(`${base}_3d_report.zip`, bytes, msg, `${(bytes.length / 1048576).toFixed(2)} MB, ${meshes.length} model files found`);
+    } catch (err) { msg.textContent = `Couldn't build the report: ${err.message}`; }
   });
 
   async function saveFile(filename, bytes, msg, savedNote) {
