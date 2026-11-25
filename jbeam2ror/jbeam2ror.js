@@ -3074,7 +3074,9 @@
     const along = (p) => dot(sub(p, carCenter), plan.fwd);
     let nFlares = 0;
     const flareTypesOrder = ['f', 'h', 'g', 't', 'b', 'R', 'l', 'r'];
-    for (const type of opts.lights ? flareTypesOrder : []) {
+    // opts.lights: true, or {beams: false} (no headlight beams), {lenses: false} (lenses don't glow)
+    const lightOpt = opts.lights === true ? {} : opts.lights || null;
+    for (const type of lightOpt ? flareTypesOrder.filter((t) => lightOpt.beams !== false || !['f', 'h', 'g'].includes(t)) : []) {
       const tris = lightTris.get(type) || [];
       const clusters = new Map();
       // one lamp per material and side (a material can cover both headlights) ...
@@ -3129,7 +3131,7 @@
       }
       if (made.length) flareIndex.set(type, made[0]);
     }
-    for (const [matName, type] of lightMats) if (flareIndex.has(type)) bindLines.push(`${flareIndex.get(type)}, ${matName}`);
+    if (!lightOpt || lightOpt.lenses !== false) for (const [matName, type] of lightMats) if (flareIndex.has(type)) bindLines.push(`${flareIndex.get(type)}, ${matName}`);
 
     if (propNotes.length) note(`${propNotes.length} prop(s) are not in the mod's model files: ${[...new Set(propNotes)].join(', ')}`);
     if (skippedWheel.length) note(`Wheel parts that match no wheel were left out: ${[...new Set(skippedWheel)].join(', ')}`);
