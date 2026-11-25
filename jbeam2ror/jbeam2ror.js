@@ -20,7 +20,7 @@
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v32';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v33';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -2481,6 +2481,418 @@
     return { meshes, ref };
   }
 
+  // ===========================================================================
+  // Zstandard decompressor (RFC 8878), for BeamNG's compressed .cdae models.
+  // Written from the specification; checked against Node's built-in zstd.
+  // ===========================================================================
+  const ZSTD_LL_BASE = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 28, 32, 40, 48, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536];
+  const ZSTD_LL_BITS = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 3, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+  const ZSTD_ML_BASE = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 37, 39, 41, 43, 47, 51, 59, 67, 83, 99, 131, 259, 515, 1027, 2051, 4099, 8195, 16387, 32771, 65539];
+  const ZSTD_ML_BITS = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 3, 3, 4, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+  const ZSTD_LL_DEF = [4, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2, 1, 1, 1, 1, 1, -1, -1, -1, -1];
+  const ZSTD_ML_DEF = [1, 4, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, -1, -1, -1, -1, -1, -1, -1];
+  const ZSTD_OF_DEF = [1, 1, 1, 1, 1, 1, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, -1, -1, -1, -1];
+  const highBit = (v) => 31 - Math.clz32(v);
+
+  // Bitstream read backwards (FSE / Huffman / sequences): starts at the padding marker in the last byte
+  function zBackReader(buf, start, end) {
+    const last = buf[end - 1];
+    if (!last) throw new Error('zstd: bad bitstream end');
+    let pos = (end - 1 - start) * 8 + highBit(last); // number of bits left
+    const bit = (i) => (buf[start + (i >> 3)] >> (i & 7)) & 1;
+    return {
+      get left() { return pos; },
+      read(n) {
+        if (!n) return 0;
+        let v = 0;
+        for (let k = n - 1; k >= 0; k--) { const i = pos - n + k; v = v * 2 + (i >= 0 ? bit(i) : 0); }
+        pos -= n;
+        return v;
+      },
+      peek(n) {
+        let v = 0;
+        for (let k = n - 1; k >= 0; k--) { const i = pos - n + k; v = v * 2 + (i >= 0 ? bit(i) : 0); }
+        return v;
+      },
+      skip(n) { pos -= n; },
+    };
+  }
+
+  // FSE table description (forward bitstream). Returns {probs, log, bytes}
+  function zReadFseCounts(buf, at, maxSym, maxLog) {
+    let bitPos = 0;
+    const readBits = (n) => { let v = 0; for (let k = 0; k < n; k++, bitPos++) v |= ((buf[at + (bitPos >> 3)] >> (bitPos & 7)) & 1) << k; return v; };
+    const peekBits = (n) => { const save = bitPos; const v = readBits(n); bitPos = save; return v; };
+    const log = readBits(4) + 5;
+    if (log > maxLog) throw new Error('zstd: FSE accuracy too large');
+    let remaining = (1 << log) + 1, threshold = 1 << log, nbBits = log + 1;
+    const probs = [];
+    let sym = 0;
+    while (remaining > 1 && sym <= maxSym) {
+      const max = (2 * threshold - 1) - remaining;
+      let count;
+      const low = peekBits(nbBits - 1);
+      if (low < max) { count = low; bitPos += nbBits - 1; }
+      else { count = peekBits(nbBits); if (count >= threshold) count -= max; bitPos += nbBits; }
+      count--;
+      remaining -= count < 0 ? -count : count;
+      probs[sym++] = count;
+      if (count === 0) {
+        let r;
+        do { r = readBits(2); for (let k = 0; k < r; k++) probs[sym++] = 0; } while (r === 3);
+      }
+      while (remaining < threshold) { nbBits--; threshold >>= 1; }
+    }
+    if (remaining !== 1) throw new Error('zstd: bad FSE description');
+    return { probs, log, bytes: (bitPos + 7) >> 3 };
+  }
+
+  function zBuildFse(probs, log) {
+    const size = 1 << log, sym = new Uint16Array(size), nb = new Uint8Array(size), base = new Uint32Array(size);
+    const next = [];
+    let high = size - 1;
+    for (let s = 0; s < probs.length; s++) if (probs[s] === -1) { sym[high--] = s; next[s] = 1; } else next[s] = probs[s];
+    const step = (size >> 1) + (size >> 3) + 3, mask = size - 1;
+    let p = 0;
+    for (let s = 0; s < probs.length; s++) for (let i = 0; i < probs[s]; i++) { sym[p] = s; do p = (p + step) & mask; while (p > high); }
+    if (p !== 0) throw new Error('zstd: bad FSE table');
+    for (let u = 0; u < size; u++) { const s = sym[u]; const ns = next[s]++; nb[u] = log - highBit(ns); base[u] = (ns << nb[u]) - size; }
+    return { sym, nb, base, log };
+  }
+  const zRle = (s) => ({ sym: new Uint16Array([s]), nb: new Uint8Array([0]), base: new Uint32Array([0]), log: 0 });
+
+  // Huffman table for literals: returns {sym, nb, maxBits, bytes}
+  function zReadHuffman(buf, at) {
+    const h = buf[at];
+    let weights = [], bytes;
+    if (h < 128) {
+      const fse = zReadFseCounts(buf, at + 1, 255, 6);
+      const t = zBuildFse(fse.probs, fse.log);
+      const br = zBackReader(buf, at + 1 + fse.bytes, at + 1 + h);
+      let s1 = br.read(t.log), s2 = br.read(t.log);
+      while (true) {
+        weights.push(t.sym[s1]); s1 = t.base[s1] + br.read(t.nb[s1]);
+        if (br.left < 0) { weights.push(t.sym[s2]); break; }
+        weights.push(t.sym[s2]); s2 = t.base[s2] + br.read(t.nb[s2]);
+        if (br.left < 0) { weights.push(t.sym[s1]); break; }
+        if (weights.length > 255) throw new Error('zstd: too many Huffman weights');
+      }
+      bytes = 1 + h;
+    } else {
+      const n = h - 127;
+      for (let i = 0; i < n; i++) { const b = buf[at + 1 + (i >> 1)]; weights.push(i & 1 ? b & 15 : b >> 4); }
+      bytes = 1 + ((n + 1) >> 1);
+    }
+    let sum = 0;
+    for (const w of weights) if (w) sum += 1 << (w - 1);
+    const maxBits = highBit(sum) + 1;
+    const rest = (1 << maxBits) - sum;
+    if (rest & (rest - 1)) throw new Error('zstd: bad Huffman weights');
+    weights.push(highBit(rest) + 1);
+    const size = 1 << maxBits, sym = new Uint8Array(size), nb = new Uint8Array(size);
+    const rankStart = [];
+    let next = 0;
+    for (let w = 1; w <= maxBits; w++) { rankStart[w] = next; for (const x of weights) if (x === w) next += 1 << (w - 1); }
+    for (let s = 0; s < weights.length; s++) {
+      const w = weights[s];
+      if (!w) continue;
+      const len = 1 << (w - 1);
+      for (let i = rankStart[w]; i < rankStart[w] + len; i++) { sym[i] = s; nb[i] = maxBits + 1 - w; }
+      rankStart[w] += len;
+    }
+    return { sym, nb, maxBits, bytes };
+  }
+
+  function zDecodeHuffStream(buf, start, end, t, out, oAt, count) {
+    const br = zBackReader(buf, start, end);
+    for (let i = 0; i < count; i++) { const v = br.peek(t.maxBits); out[oAt + i] = t.sym[v]; br.skip(t.nb[v]); }
+  }
+
+  function zstdDecompress(input) {
+    let out = new Uint8Array(Math.max(1024, input.length * 4)), o = 0;
+    const ensure = (n) => { if (o + n > out.length) { let sz = out.length; while (o + n > sz) sz *= 2; const nb2 = new Uint8Array(sz); nb2.set(out.subarray(0, o)); out = nb2; } };
+    let p = 0;
+    const u32 = (q) => input[q] | (input[q + 1] << 8) | (input[q + 2] << 16) | (input[q + 3] << 24) >>> 0;
+    while (p < input.length) {
+      const magic = u32(p) >>> 0;
+      if ((magic & 0xFFFFFFF0) >>> 0 === 0x184D2A50) { p += 8 + u32(p + 4); continue; } // skippable frame
+      if (magic !== 0xFD2FB528) throw new Error('zstd: not a zstd frame');
+      p += 4;
+      const fhd = input[p++];
+      const fcsFlag = fhd >> 6, single = (fhd >> 5) & 1, checksum = (fhd >> 2) & 1, dictFlag = fhd & 3;
+      if (!single) p++; // window descriptor
+      if (dictFlag) throw new Error('zstd: dictionaries are not supported');
+      p += [single ? 1 : 0, 2, 4, 8][fcsFlag];
+      const frameStart = o;
+      let rep = [1, 4, 8], huff = null, tLL = null, tOF = null, tML = null;
+      while (true) {
+        const bh = input[p] | (input[p + 1] << 8) | (input[p + 2] << 16);
+        p += 3;
+        const last = bh & 1, type = (bh >> 1) & 3, size = bh >> 3;
+        if (type === 0) { ensure(size); out.set(input.subarray(p, p + size), o); o += size; p += size; }
+        else if (type === 1) { ensure(size); out.fill(input[p], o, o + size); o += size; p += 1; }
+        else if (type === 2) {
+          const blockEnd = p + size;
+          // ---- literals
+          const lb0 = input[p], ltype = lb0 & 3, sf = (lb0 >> 2) & 3;
+          let lits, litSize;
+          if (ltype < 2) {
+            let hdr;
+            if ((sf & 1) === 0) { litSize = lb0 >> 3; hdr = 1; }
+            else if (sf === 1) { litSize = (lb0 >> 4) + (input[p + 1] << 4); hdr = 2; }
+            else { litSize = (lb0 >> 4) + (input[p + 1] << 4) + (input[p + 2] << 12); hdr = 3; }
+            p += hdr;
+            if (ltype === 0) { lits = input.subarray(p, p + litSize); p += litSize; }
+            else { lits = new Uint8Array(litSize).fill(input[p]); p += 1; }
+          } else {
+            const hb = [3, 3, 4, 5][sf], bits = [10, 10, 14, 18][sf];
+            let hv = 0;
+            for (let k = hb - 1; k >= 0; k--) hv = hv * 256 + input[p + k];
+            const mask = 2 ** bits;
+            litSize = Math.floor(hv / 16) % mask;
+            const comp = Math.floor(hv / 16 / mask) % mask;
+            p += hb;
+            const cEnd = p + comp;
+            if (ltype === 2) { huff = zReadHuffman(input, p); p += huff.bytes; }
+            else if (!huff) throw new Error('zstd: treeless literals without a table');
+            lits = new Uint8Array(litSize);
+            if (sf === 0) zDecodeHuffStream(input, p, cEnd, huff, lits, 0, litSize);
+            else {
+              const s1 = input[p] | (input[p + 1] << 8), s2 = input[p + 2] | (input[p + 3] << 8), s3 = input[p + 4] | (input[p + 5] << 8);
+              const per = (litSize + 3) >> 2;
+              let q = p + 6;
+              const ends = [q + s1, q + s1 + s2, q + s1 + s2 + s3, cEnd];
+              let oq = 0;
+              for (let k = 0; k < 4; k++) { const n = k < 3 ? per : litSize - 3 * per; zDecodeHuffStream(input, q, ends[k], huff, lits, oq, n); oq += n; q = ends[k]; }
+            }
+            p = cEnd;
+          }
+          // ---- sequences
+          let nSeq = input[p++];
+          if (nSeq >= 128) { if (nSeq < 255) nSeq = ((nSeq - 128) << 8) + input[p++]; else { nSeq = input[p] + (input[p + 1] << 8) + 0x7F00; p += 2; } }
+          let li = 0;
+          if (nSeq > 0) {
+            const modes = input[p++];
+            const table = (mode, def, defLog, maxSym, maxLog, prev) => {
+              if (mode === 0) return zBuildFse(def, defLog);
+              if (mode === 1) return zRle(input[p++]);
+              if (mode === 2) { const c = zReadFseCounts(input, p, maxSym, maxLog); p += c.bytes; return zBuildFse(c.probs, c.log); }
+              if (!prev) throw new Error('zstd: repeat table without a previous one');
+              return prev;
+            };
+            tLL = table(modes >> 6, ZSTD_LL_DEF, 6, 35, 9, tLL);
+            tOF = table((modes >> 4) & 3, ZSTD_OF_DEF, 5, 31, 8, tOF);
+            tML = table((modes >> 2) & 3, ZSTD_ML_DEF, 6, 52, 9, tML);
+            const br = zBackReader(input, p, blockEnd);
+            let sLL = br.read(tLL.log), sOF = br.read(tOF.log), sML = br.read(tML.log);
+            for (let s = 0; s < nSeq; s++) {
+              const ofc = tOF.sym[sOF], mlc = tML.sym[sML], llc = tLL.sym[sLL];
+              const ofv = 2 ** ofc + br.read(ofc);
+              const ml = ZSTD_ML_BASE[mlc] + br.read(ZSTD_ML_BITS[mlc]);
+              const ll = ZSTD_LL_BASE[llc] + br.read(ZSTD_LL_BITS[llc]);
+              let off;
+              if (ofv > 3) { off = ofv - 3; rep = [off, rep[0], rep[1]]; }
+              else {
+                const idx = ofv - 1 + (ll === 0 ? 1 : 0);
+                if (idx === 0) off = rep[0];
+                else if (idx === 3) { off = rep[0] - 1; rep = [off, rep[0], rep[1]]; }
+                else { off = rep[idx]; rep = idx === 1 ? [off, rep[0], rep[2]] : [off, rep[0], rep[1]]; }
+              }
+              ensure(ll + ml);
+              out.set(lits.subarray(li, li + ll), o); o += ll; li += ll;
+              if (off > o - frameStart || off <= 0) throw new Error('zstd: bad match offset');
+              for (let k = 0; k < ml; k++) { out[o] = out[o - off]; o++; }
+              if (s < nSeq - 1) {
+                sLL = tLL.base[sLL] + br.read(tLL.nb[sLL]);
+                sML = tML.base[sML] + br.read(tML.nb[sML]);
+                sOF = tOF.base[sOF] + br.read(tOF.nb[sOF]);
+              }
+            }
+          }
+          const restLits = litSize - li;
+          ensure(restLits);
+          out.set(lits.subarray(li, litSize), o); o += restLits;
+          p = blockEnd;
+        } else throw new Error('zstd: reserved block type');
+        if (last) break;
+      }
+      if (checksum) p += 4;
+    }
+    return out.subarray(0, o);
+  }
+
+  // ===========================================================================
+  // BeamNG compiled models (.cdae, "shape MessagePack" format): Torque3D's TSShape
+  // tables stored as MessagePack values, body compressed with Zstandard.
+  // ===========================================================================
+  function msgpackDecode(buf, pos) {
+    const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    let p = pos || 0;
+    const td = new TextDecoder();
+    const str = (n) => { const s = td.decode(buf.subarray(p, p + n)); p += n; return s; };
+    const bin = (n) => { const s = buf.subarray(p, p + n); p += n; return s; };
+    const arr = (n) => { const a = new Array(n); for (let i = 0; i < n; i++) a[i] = val(); return a; };
+    const map = (n) => { const o = {}; for (let i = 0; i < n; i++) { const k = val(); o[k] = val(); } return o; };
+    const ext = (n) => { p++; return bin(n); };
+    function val() {
+      const b = buf[p++];
+      if (b <= 0x7f) return b;
+      if (b >= 0xe0) return b - 256;
+      if ((b & 0xf0) === 0x80) return map(b & 0x0f);
+      if ((b & 0xf0) === 0x90) return arr(b & 0x0f);
+      if ((b & 0xe0) === 0xa0) return str(b & 0x1f);
+      let v;
+      switch (b) {
+        case 0xc0: return null; case 0xc2: return false; case 0xc3: return true;
+        case 0xc4: v = buf[p]; p += 1; return bin(v);
+        case 0xc5: v = dv.getUint16(p); p += 2; return bin(v);
+        case 0xc6: v = dv.getUint32(p); p += 4; return bin(v);
+        case 0xc7: v = buf[p]; p += 1; return ext(v);
+        case 0xc8: v = dv.getUint16(p); p += 2; return ext(v);
+        case 0xc9: v = dv.getUint32(p); p += 4; return ext(v);
+        case 0xca: v = dv.getFloat32(p); p += 4; return v;
+        case 0xcb: v = dv.getFloat64(p); p += 8; return v;
+        case 0xcc: v = buf[p]; p += 1; return v;
+        case 0xcd: v = dv.getUint16(p); p += 2; return v;
+        case 0xce: v = dv.getUint32(p); p += 4; return v;
+        case 0xcf: v = Number(dv.getBigUint64(p)); p += 8; return v;
+        case 0xd0: v = dv.getInt8(p); p += 1; return v;
+        case 0xd1: v = dv.getInt16(p); p += 2; return v;
+        case 0xd2: v = dv.getInt32(p); p += 4; return v;
+        case 0xd3: v = Number(dv.getBigInt64(p)); p += 8; return v;
+        case 0xd4: return ext(1); case 0xd5: return ext(2); case 0xd6: return ext(4); case 0xd7: return ext(8); case 0xd8: return ext(16);
+        case 0xd9: v = buf[p]; p += 1; return str(v);
+        case 0xda: v = dv.getUint16(p); p += 2; return str(v);
+        case 0xdb: v = dv.getUint32(p); p += 4; return str(v);
+        case 0xdc: v = dv.getUint16(p); p += 2; return arr(v);
+        case 0xdd: v = dv.getUint32(p); p += 4; return arr(v);
+        case 0xde: v = dv.getUint16(p); p += 2; return map(v);
+        case 0xdf: v = dv.getUint32(p); p += 4; return map(v);
+      }
+      throw new Error('bad MessagePack byte 0x' + b.toString(16));
+    }
+    const value = val();
+    return { value, end: p };
+  }
+
+  /** Object names from a .cdae header, without decompressing the body. */
+  function cdaeObjectNames(bytes) {
+    const h = msgpackDecode(bytes, 8).value;
+    return Array.isArray(h && h.objectNames) ? h.objectNames : [];
+  }
+
+  /**
+   * Parse a .cdae into the same shape as parseCollada: {meshes: Map(name -> item), cdae: true}.
+   * Each item has the object's node world matrix (row-major, BeamNG vehicle space) and its mesh.
+   */
+  function parseCdae(bytes) {
+    const headDv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const head = msgpackDecode(bytes, 8);
+    if (!head.value || head.value.objectNames === undefined) throw new Error('not a MessagePack .cdae');
+    let body = bytes.subarray(head.end);
+    if (head.value.compression) body = zstdDecompress(body);
+    void headDv;
+    let p = 0;
+    const next = () => { const d = msgpackDecode(body, p); p = d.end; return d.value; };
+    const table = () => { const n = next(), sz = next(), bin = next(); return { n, sz, bin: bin instanceof Uint8Array ? bin : new Uint8Array(0) }; };
+    const dvOf = (bin) => new DataView(bin.buffer, bin.byteOffset, bin.byteLength);
+    next(); next(); next(); next(); next(); next(); // flags, smallest size/radius, radius, centre, bounds
+    const nodesT = table(), objectsT = table();
+    for (let i = 0; i < 4; i++) table(); // sub-shapes
+    const rotT = table(), transT = table();
+    for (let i = 0; i < 8; i++) table(); // animation tables
+    table(); table(); table(); // object states, triggers, details
+    const nNames = next();
+    const names = [];
+    for (let i = 0; i < nNames; i++) names.push(next());
+    const nMeshes = next();
+    const meshes = [];
+    for (let m = 0; m < nMeshes; m++) {
+      const type = next();
+      if (type === 4) { meshes.push(null); continue; } // null mesh
+      if (type !== 0) throw new Error(`unsupported mesh type ${type} in .cdae`);
+      next(); next(); next(); next(); next(); next(); // frames, material frames, parent, bounds, centre, radius
+      const verts = table(), tverts = table(); table(); /* tverts2 */ table(); /* colours */
+      const normals = table(); table(); /* encoded normals */
+      const prims = table(), indices = table(); table(); /* tangents */
+      next(); next(); // verts per frame, flags
+      meshes.push({ verts, tverts, normals, prims, indices });
+    }
+    next(); // sequences
+    const nMats = next();
+    const materials = [];
+    for (let i = 0; i < nMats; i++) { materials.push(next()); next(); next(); next(); next(); next(); next(); }
+    // node world matrices: parent * (rotation, translation); rotations are 16-bit quaternions
+    const nd = dvOf(nodesT.bin), rd = dvOf(rotT.bin), td = dvOf(transT.bin);
+    const world = [];
+    const local = (i) => {
+      const q = [0, 1, 2, 3].map((k) => rd.getInt16(i * 8 + k * 2, true) / 32767);
+      const l = Math.hypot(...q) || 1;
+      const [x, y, z, w] = q.map((v) => v / l);
+      const t = [0, 1, 2].map((k) => td.getFloat32(i * 12 + k * 4, true));
+      // Torque stores the inverse (conjugate) rotation
+      const xx = x * x, yy = y * y, zz = z * z, xy = x * y, xz = x * z, yz = y * z, wx = w * x, wy = w * y, wz = w * z;
+      return [1 - 2 * (yy + zz), 2 * (xy + wz), 2 * (xz - wy), t[0],
+        2 * (xy - wz), 1 - 2 * (xx + zz), 2 * (yz + wx), t[1],
+        2 * (xz + wy), 2 * (yz - wx), 1 - 2 * (xx + yy), t[2],
+        0, 0, 0, 1];
+    };
+    const worldOf = (i, guard) => {
+      if (world[i]) return world[i];
+      const parent = nd.getInt32(i * 20 + 4, true);
+      const m = parent >= 0 && parent !== i && guard < 64 ? m4.mul(worldOf(parent, guard + 1), local(i)) : local(i);
+      world[i] = m;
+      return m;
+    };
+    const od = dvOf(objectsT.bin);
+    const out = new Map();
+    for (let i = 0; i < objectsT.n; i++) {
+      const nameIdx = od.getInt32(i * 24, true), numMeshes = od.getInt32(i * 24 + 4, true), start = od.getInt32(i * 24 + 8, true), node = od.getInt32(i * 24 + 12, true);
+      const mesh = numMeshes > 0 ? meshes[start] : null;
+      const name = names[nameIdx];
+      if (!mesh || !name || out.has(name)) continue;
+      out.set(name, { name, matrix: node >= 0 && node < nodesT.n ? worldOf(node, 0) : m4.id(), cdaeMesh: mesh, materials });
+    }
+    return { meshes: out, cdae: true };
+  }
+
+  /** Geometry of a .cdae object, same result as colladaGeometry. */
+  function cdaeGeometry(item) {
+    const m = item.cdaeMesh, M = item.matrix;
+    const vd = new DataView(m.verts.bin.buffer, m.verts.bin.byteOffset, m.verts.bin.byteLength);
+    const nd = new DataView(m.normals.bin.buffer, m.normals.bin.byteOffset, m.normals.bin.byteLength);
+    const td = new DataView(m.tverts.bin.buffer, m.tverts.bin.byteOffset, m.tverts.bin.byteLength);
+    const id = new DataView(m.indices.bin.buffer, m.indices.bin.byteOffset, m.indices.bin.byteLength);
+    const pd = new DataView(m.prims.bin.buffer, m.prims.bin.byteOffset, m.prims.bin.byteLength);
+    const nV = m.verts.n;
+    const pos = new Float64Array(nV * 3), nrm = new Float64Array(nV * 3), uv = new Float64Array(nV * 2);
+    for (let v = 0; v < nV; v++) {
+      const x = vd.getFloat32(v * 12, true), y = vd.getFloat32(v * 12 + 4, true), z = vd.getFloat32(v * 12 + 8, true);
+      pos[v * 3] = M[0] * x + M[1] * y + M[2] * z + M[3]; pos[v * 3 + 1] = M[4] * x + M[5] * y + M[6] * z + M[7]; pos[v * 3 + 2] = M[8] * x + M[9] * y + M[10] * z + M[11];
+      if (v < m.normals.n) {
+        const a = nd.getFloat32(v * 12, true), b = nd.getFloat32(v * 12 + 4, true), c = nd.getFloat32(v * 12 + 8, true);
+        const nx = M[0] * a + M[1] * b + M[2] * c, ny = M[4] * a + M[5] * b + M[6] * c, nz = M[8] * a + M[9] * b + M[10] * c;
+        const l = Math.hypot(nx, ny, nz) || 1;
+        nrm[v * 3] = nx / l; nrm[v * 3 + 1] = ny / l; nrm[v * 3 + 2] = nz / l;
+      } else nrm[v * 3 + 2] = 1;
+      if (v < m.tverts.n) { uv[v * 2] = td.getFloat32(v * 8, true); uv[v * 2 + 1] = td.getFloat32(v * 8 + 4, true); }
+    }
+    const subs = new Map();
+    for (let k = 0; k < m.prims.n; k++) {
+      const start = pd.getInt32(k * 12, true), count = pd.getInt32(k * 12 + 4, true), mi = pd.getUint32(k * 12 + 8, true);
+      const kind = mi >>> 30, noMat = (mi >>> 28) & 1, matIdx = mi & 0x0fffffff;
+      const matName = noMat ? 'default' : item.materials[matIdx] || 'default';
+      if (!subs.has(matName)) subs.set(matName, []);
+      const out = subs.get(matName);
+      const ix = (i) => id.getUint32((start + i) * 4, true);
+      // Torque winds triangles the other way round from Collada/OGRE: flip each one
+      if (kind === 0) for (let i = 0; i + 2 < count; i += 3) out.push(ix(i), ix(i + 2), ix(i + 1));
+      else if (kind === 1) for (let i = 0; i + 2 < count; i++) { const a = ix(i), b = ix(i + 1), c = ix(i + 2); if (a === b || b === c || a === c) continue; if (i & 1) out.push(b, c, a); else out.push(a, c, b); }
+      else if (kind === 2) for (let i = 1; i + 1 < count; i++) out.push(ix(0), ix(i + 1), ix(i));
+    }
+    return { pos, nrm, uv, subs: [...subs].filter(([, idx]) => idx.length).map(([material, idx]) => ({ material, idx })) };
+  }
+
   /**
    * Triangles of one Collada mesh instance, in BeamNG vehicle space.
    * Returns {pos: Float64Array, nrm, uv, subs: [{material, idx: number[]}]} with
@@ -2729,14 +3141,25 @@
     const note = (m) => { notes.push(m); };
     if (!plan || !plan.flexbodies.length) { note('This configuration has no 3D model parts (flexbodies).'); return { added: 0, notes }; }
     // Which .dae file has which mesh name (quick scan of node names first)
-    const daeEntries = [...(lib.files || new Map()).values()].filter((e) => /\.dae$/i.test(e.path));
-    if (!daeEntries.length) { note('No .dae model files in the mod, so the body stays as plain panels. Use the full mod zip.'); return { added: 0, notes }; }
+    // .dae (Collada) first, then BeamNG's compiled .cdae, for meshes no .dae has
+    const allFiles = [...new Set((lib.files || new Map()).values())];
+    const daeEntries = allFiles.filter((e) => /\.dae$/i.test(e.path)).concat(allFiles.filter((e) => /\.cdae$/i.test(e.path)));
+    if (!daeEntries.length) { note('No 3D model files (.dae/.cdae) in the mod, so the body stays as plain panels. Use the full mod zip.'); return { added: 0, notes }; }
     const wanted = new Set([...plan.flexbodies.map((f) => f.mesh), ...(plan.props || []).map((pr) => pr.mesh)]);
     const daeTexts = new Map();
     const dec = new TextDecoder('utf-8');
     const owner = new Map(); // mesh name -> entry
     for (const e of daeEntries) {
       log(`Scanning ${e.path}…`);
+      if (/\.cdae$/i.test(e.path)) {
+        const bytes = await e.read();
+        let names = [];
+        try { names = cdaeObjectNames(bytes); } catch (err) { note(`${e.path} is a compiled model in an older format that can't be read yet.`); continue; }
+        let hitC = false;
+        for (const nm of names) if (wanted.has(nm) && !owner.has(nm)) { owner.set(nm, e); hitC = true; }
+        if (hitC) daeTexts.set(e, bytes);
+        continue;
+      }
       const text = dec.decode(await e.read());
       let hit = false;
       for (const m of text.matchAll(/<node\b[^>]*?\bname="([^"]+)"/g)) if (wanted.has(m[1]) && !owner.has(m[1])) { owner.set(m[1], e); hit = true; }
@@ -2744,7 +3167,16 @@
       if (hit) daeTexts.set(e, text);
     }
     const parsed = new Map();
-    const daeFor = (e) => { if (!parsed.has(e)) { log(`Reading 3D model ${e.path}…`); parsed.set(e, parseCollada(daeTexts.get(e))); daeTexts.delete(e); } return parsed.get(e); };
+    const daeFor = (e) => {
+      if (!parsed.has(e)) {
+        log(`Reading 3D model ${e.path}…`);
+        const src = daeTexts.get(e);
+        parsed.set(e, src instanceof Uint8Array ? parseCdae(src) : parseCollada(src));
+        daeTexts.delete(e);
+      }
+      return parsed.get(e);
+    };
+    const geometryOf = (dae, item) => (dae.cdae ? cdaeGeometry(item) : colladaGeometry(dae, item));
 
     const matDefs = loadMaterialDefs(lib);
     const model = plan.model;
@@ -2884,7 +3316,7 @@
       const dae = daeFor(e);
       const item = dae.meshes.get(fb.mesh);
       if (!item) { missingMesh.push(fb.mesh); continue; }
-      if (!item.cache) item.cache = colladaGeometry(dae, item);
+      if (!item.cache) item.cache = geometryOf(dae, item);
       const g = item.cache;
       if (!g || !g.subs.length) continue;
       // forset: the nodes of the flexbody's groups
@@ -3184,7 +3616,7 @@
       const e = owner.get(pr.mesh);
       const item = e ? daeFor(e).meshes.get(pr.mesh) : null;
       if (!item) { propNotes.push(pr.mesh); continue; }
-      if (!item.cache) item.cache = colladaGeometry(daeFor(e), item);
+      if (!item.cache) item.cache = geometryOf(daeFor(e), item);
       const g = item.cache;
       if (!g || !g.subs.length) continue;
       const M = item.matrix;
@@ -3673,7 +4105,7 @@
     }));
   }
 
-  const api = { parseDDS, decodeDDS, encodeDDS, convertTexture, _bc7Block: bc7Block, addVisuals, parseCollada, colladaGeometry, writeOgreMesh, readOgreMesh, parseXML, makeZipCompressed, version: CONVERTER_VERSION, experiments: EXPERIMENTS, pack: PACK, _stabilizeModes: stabilizeModes, _simulateDrop: simulateDrop, parseJBeam, evalExpression, openZip, makeZip, loadLibrary, listVehicles, convert, buildModZip, filesToEntries, crc32 };
+  const api = { zstdDecompress, parseCdae, cdaeGeometry, cdaeObjectNames, parseDDS, decodeDDS, encodeDDS, convertTexture, _bc7Block: bc7Block, addVisuals, parseCollada, colladaGeometry, writeOgreMesh, readOgreMesh, parseXML, makeZipCompressed, version: CONVERTER_VERSION, experiments: EXPERIMENTS, pack: PACK, _stabilizeModes: stabilizeModes, _simulateDrop: simulateDrop, parseJBeam, evalExpression, openZip, makeZip, loadLibrary, listVehicles, convert, buildModZip, filesToEntries, crc32 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.J2R = api;
 })(typeof self !== 'undefined' ? self : this);

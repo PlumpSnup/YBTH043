@@ -211,6 +211,20 @@ for (const [S, s, y] of [['F', 'f', -1.3], ['R', 'r', 1.3]]) {
   const rd = J2R.convert(lib, { debug: 'quiet', config: 'red' });
   await J2R.addVisuals(lib, rd, {});
   check(/source: steeringwheel/.test(rd.truck) && /source: speedo/.test(rd.truck) && /^flares2$/m.test(rd.truck) && !/^materialflarebindings$/m.test(rd.truck) && !/mirror\.mesh/.test(rd.truck), 'by default: steering wheel, needles and pedals, lights without glowing lenses (those crashed RoR), no mirrors');
+  // Zstandard (BeamNG's compressed .cdae models): checked against Node's own zstd when present
+  const zl = require('zlib');
+  if (zl.zstdCompressSync) {
+    let zok = true;
+    for (let k = 0; k < 8; k++) {
+      const n = 1000 + k * 37000, d = new Uint8Array(n);
+      for (let i = 0; i < n; i++) d[i] = k % 2 ? (i * 7919 + (i >> 5)) & 255 : (i % 251 < 120 ? 65 + (i % 7) : (i * 31) & 255);
+      const c = new Uint8Array(zl.zstdCompressSync(d, { params: { [zl.constants.ZSTD_c_compressionLevel]: [1, 3, 9, 19][k % 4] } }));
+      const m = J2R.zstdDecompress(c);
+      if (m.length !== n || m.some((x, i) => x !== d[i])) zok = false;
+    }
+    check(zok, 'Zstandard decoder matches Node\'s zstd at several levels');
+  }
+
   console.log(failed ? `\n${failed} check(s) failed` : '\nAll feature checks passed');
   process.exit(failed ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });
