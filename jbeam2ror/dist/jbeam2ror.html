@@ -210,7 +210,7 @@ footer p { margin: 0 0 6px; }
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v29';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v30';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -3024,6 +3024,7 @@ footer p { margin: 0 0 6px; }
     const lines = [];
     const missingMesh = [];
     const skippedWheel = [];
+    let anchorFixed = 0;
     const mirrorTris = { left: [], right: [] };
     let mirrorsMade = 0;
     const lightTris = new Map(); // flare type -> [{p, n, a, tail}]
@@ -3101,6 +3102,46 @@ footer p { margin: 0 0 6px; }
       if (!wheel && lacksY(forset)) {
         const extra = plan.bodyNodes.filter((n) => !forset.includes(n)).sort((a, b) => dist2(byNum[a].pos, centroid) - dist2(byNum[b].pos, centroid));
         for (const n of extra) { forset.push(n); if (!lacksY(forset)) break; if (forset.length > fb.nodes.length + 12) break; }
+      }
+      // Crash spikes: RoR anchors each vertex to its nearest forset node, the next nearest, and
+      // a third one roughly at right angles (FlexBody.cpp). A vertex far out from a small
+      // anchor triangle swings a long way when that triangle twists in a crash. Where the
+      // lever (vertex distance / anchor size) gets big, add the nearest other nodes.
+      if (!wheel && !opts.noAnchorFix) {
+        const step = Math.max(1, Math.floor(nV / 400));
+        const lever = (set) => {
+          let worst = 0, at = -1, missing = 0;
+          for (let v = 0; v < nV; v += step) {
+            const p = [world[v * 3], world[v * 3 + 1], world[v * 3 + 2]];
+            const srt = set.slice().sort((a2, b2) => dist2(P0(a2), p) - dist2(P0(b2), p));
+            const ref = srt[0], nx = srt[1];
+            if (nx === undefined) continue;
+            const vx = sub(P0(nx), P0(ref)), lx = Math.hypot(...vx);
+            let ly = 0;
+            for (const c of srt.slice(2)) { const vt = sub(P0(c), P0(ref)), lt = Math.hypot(...vt); if (lt > 0 && Math.abs(dot(vx, vt) / (lx * lt)) <= Math.SQRT1_2) { ly = lt; break; } }
+            // no usable third node: RoR falls back to node 0 ("VY node not found") - worst case
+            const lev = ly ? Math.sqrt(dist2(p, P0(ref))) / Math.max(1e-3, Math.min(lx, ly)) : 1e6;
+            if (!ly) missing++;
+            if (lev > worst) { worst = lev; at = v; }
+          }
+          return { worst, at, missing, score: missing * 1e3 + Math.min(worst, 999) };
+        };
+        let lv = lever(forset), added = 0;
+        while (lv.worst > 3 && added < 16) {
+          const p = [world[lv.at * 3], world[lv.at * 3 + 1], world[lv.at * 3 + 2]];
+          const cands = plan.bodyNodes.filter((n) => !forset.includes(n)).sort((a2, b2) => dist2(P0(a2), p) - dist2(P0(b2), p)).slice(0, 8);
+          let bestTrial = null;
+          const consider = (trial) => { const lt = lever(trial); if (!bestTrial || lt.score < bestTrial.lt.score) bestTrial = { trial, lt }; };
+          for (const cand of cands) consider(forset.concat([cand]));
+          // ... or drop one of two nodes that sit almost on top of each other (a tiny anchor)
+          if (forset.length > 5) {
+            const near = forset.slice().sort((a2, b2) => dist2(P0(a2), p) - dist2(P0(b2), p)).slice(0, 2);
+            if (dist2(P0(near[0]), P0(near[1])) < 0.08 * 0.08) for (const n of near) consider(forset.filter((x) => x !== n));
+          }
+          if (!bestTrial || bestTrial.lt.score >= lv.score - 1e-6) break;
+          forset = bestTrial.trial; lv = bestTrial.lt; added++;
+        }
+        if (added) anchorFixed++;
       }
       // Placement frame (ref, x and y nodes)
       const P = (n) => byNum[n].pos;
@@ -3244,6 +3285,7 @@ footer p { margin: 0 0 6px; }
       lathe(w, prof, t0, h, tyreMat, 'tyre', (tt, rr) => [rr - midR, tt * h * 1.5]);
       tyred.push(w.name);
     }
+    if (anchorFixed) note(`${anchorFixed} part(s) got extra anchor nodes so their mesh doesn't spike in crashes.`);
     if (rimsMade) note(`${rimsMade} wheel(s) use a rim model from the base game; a plain steel rim was built instead.`);
     // ---- props (steering wheel, gauge needles, pedals), working mirrors, lights ----
     const propLines = [];
