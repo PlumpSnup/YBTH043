@@ -20,7 +20,7 @@
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v20';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v21';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -3000,7 +3000,7 @@
     const rearward = [-plan.fwd[0], -plan.fwd[1], -plan.fwd[2]];
     // Props crash RoR 2026.01 on spawn in some combinations (found with test builds), so
     // they're only added when asked for (opts.props: 'all' | 'static' | 'steering' | 'gauges').
-    const propMode = opts.props || 'none';
+    const propMode = opts.props || 'steering';
     const propWanted = (pr) => propMode === 'all' || propMode === 'static' || (propMode === 'steering' && pr.func.toLowerCase() === 'steering') || (propMode === 'gauges' && pr.func.toLowerCase() !== 'steering' && /wheelspeed|rpm|fuel|temp|throttle|brake|clutch|parkingbrake/i.test(pr.func));
     for (const pr of (plan.props || []).filter(propWanted)) {
       const e = owner.get(pr.mesh);
@@ -3074,7 +3074,7 @@
     const along = (p) => dot(sub(p, carCenter), plan.fwd);
     let nFlares = 0;
     const flareTypesOrder = ['f', 'h', 'g', 't', 'b', 'R', 'l', 'r'];
-    for (const type of opts.skipLights ? [] : flareTypesOrder) {
+    for (const type of opts.lights ? flareTypesOrder : []) {
       const tris = lightTris.get(type) || [];
       const clusters = new Map();
       // one lamp per material and side (a material can cover both headlights) ...

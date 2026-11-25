@@ -130,7 +130,7 @@ for (const [S, s, y] of [['F', 'f', -1.3], ['R', 'r', 1.3]]) {
 
   // 3D model: Collada -> OGRE mesh placed on the nodes exactly like RoR's FlexBody.cpp
   const rv = J2R.convert(lib, { debug: 'quiet', config: 'red' });
-  const vis = await J2R.addVisuals(lib, rv, { props: 'all', mirrors: true });
+  const vis = await J2R.addVisuals(lib, rv, { props: 'all', mirrors: true, lights: true });
   const vt = require('./validate-truck.js').validate(rv.truck);
   check(vis.added >= 1 && /^flexbodies$/m.test(rv.truck) && /^forset \d/m.test(rv.truck) && vt.ok, `flexbody + forset written and valid${vt.ok ? '' : ': ' + vt.errors.join('; ')}`);
   check(vis.notes.some((x) => /not_in_dae/.test(x)), 'parts missing from the model are reported');
@@ -207,7 +207,8 @@ for (const [S, s, y] of [['F', 'f', -1.3], ['R', 'r', 1.3]]) {
 
   const rd = J2R.convert(lib, { debug: 'quiet', config: 'red' });
   await J2R.addVisuals(lib, rd, {});
-  check(!/^props$/m.test(rd.truck) && /^flares2$/m.test(rd.truck), 'by default no props or mirrors (they crashed RoR on spawn), lights still there');
+  const rdProps = rd.truck.split('\n').filter((l) => /\.mesh$/.test(l) && /prop/.test(l));
+  check(rdProps.length === 1 && /source: steeringwheel/.test(rd.truck) && !/^flares2$/m.test(rd.truck) && !/mirror\.mesh/.test(rd.truck), 'by default: the steering wheel only, no lights or mirrors (everything at once crashed RoR on spawn)');
   console.log(failed ? `\n${failed} check(s) failed` : '\nAll feature checks passed');
   process.exit(failed ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });

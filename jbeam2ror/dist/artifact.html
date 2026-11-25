@@ -202,7 +202,7 @@ footer p { margin: 0 0 6px; }
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v20';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v21';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -3182,7 +3182,7 @@ footer p { margin: 0 0 6px; }
     const rearward = [-plan.fwd[0], -plan.fwd[1], -plan.fwd[2]];
     // Props crash RoR 2026.01 on spawn in some combinations (found with test builds), so
     // they're only added when asked for (opts.props: 'all' | 'static' | 'steering' | 'gauges').
-    const propMode = opts.props || 'none';
+    const propMode = opts.props || 'steering';
     const propWanted = (pr) => propMode === 'all' || propMode === 'static' || (propMode === 'steering' && pr.func.toLowerCase() === 'steering') || (propMode === 'gauges' && pr.func.toLowerCase() !== 'steering' && /wheelspeed|rpm|fuel|temp|throttle|brake|clutch|parkingbrake/i.test(pr.func));
     for (const pr of (plan.props || []).filter(propWanted)) {
       const e = owner.get(pr.mesh);
@@ -3256,7 +3256,7 @@ footer p { margin: 0 0 6px; }
     const along = (p) => dot(sub(p, carCenter), plan.fwd);
     let nFlares = 0;
     const flareTypesOrder = ['f', 'h', 'g', 't', 'b', 'R', 'l', 'r'];
-    for (const type of opts.skipLights ? [] : flareTypesOrder) {
+    for (const type of opts.lights ? flareTypesOrder : []) {
       const tris = lightTris.get(type) || [];
       const clusters = new Map();
       // one lamp per material and side (a material can cover both headlights) ...
@@ -4053,9 +4053,9 @@ else root.J2R_SAMPLE = { buildSample };
           <div class="row"><button type="button" id="packBtn">Download test pack</button><span class="status" id="packStatus"></span></div>
         </div>
       </details>
-      ${r.report.model ? `<details><summary>Help find the steering wheel / gauges crash: download a test pack</summary>
+      ${r.report.model ? `<details><summary>Optional extras (lights, mirrors, needles): download a test pack</summary>
         <div style="padding:0 12px 12px;display:grid;gap:8px;font-size:14px">
-          <p style="margin:0">The steering wheel, gauge needles, pedals and mirrors are left out for now because they crashed RoR on spawn. This zip holds five versions that add them back a bit at a time. Spawn each one (restart RoR after a crash) and note which ones crash.</p>
+          <p style="margin:0">The normal download has the rims and the steering wheel. With every extra switched on at once RoR crashed on spawn, so lights, mirrors, needles and pedals are left out. This zip holds versions that each add one of them back; spawn each (restart RoR after a crash) and note which ones work.</p>
           <ul class="notes">${MODEL_TESTS.map((t) => `<li><b>[j2r ${esc(J2R.version)} ${t.tag}]</b>: ${esc(t.label)}</li>`).join('')}</ul>
           <div class="row"><button type="button" id="modelPackBtn">Download crash test pack</button><span class="status" id="modelPackStatus"></span></div>
         </div>
@@ -4068,11 +4068,10 @@ else root.J2R_SAMPLE = { buildSample };
   }
 
   const MODEL_TESTS = [
-    { tag: 'P1', label: 'mirrors only (no steering wheel, needles or pedals)', o: { mirrors: true } },
-    { tag: 'P2', label: 'steering wheel, needles, pedals and fans, but none of them move', o: { props: 'static' } },
-    { tag: 'P3', label: 'only the steering wheel, turning', o: { props: 'steering' } },
-    { tag: 'P4', label: 'only the needles and pedals, moving', o: { props: 'gauges' } },
-    { tag: 'P5', label: 'everything (steering wheel, needles, pedals, fans, mirrors)', o: { props: 'all', mirrors: true } },
+    { tag: 'P1', label: 'rims + steering wheel + mirrors', o: { mirrors: true } },
+    { tag: 'P2', label: 'rims + steering wheel + needles and pedals', o: { props: 'all' } },
+    { tag: 'P3', label: 'rims + steering wheel + lights', o: { lights: true } },
+    { tag: 'P4', label: 'everything (needles, pedals, mirrors, lights)', o: { props: 'all', mirrors: true, lights: true } },
   ];
   async function saveModelPack() {
     const msg = $('modelPackStatus');
