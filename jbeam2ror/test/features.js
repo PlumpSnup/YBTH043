@@ -126,6 +126,9 @@ for (const [S, s, y] of [['F', 'f', -1.3], ['R', 'r', 1.3]]) {
   const stop = D.shocks.find((x) => x.stop && x.a === 'fhl');
   check(stop && Math.abs(stop.sb - 0.3) < 1e-9 && stop.spring === 0 && stop.precomp === 1, 'pre-shortened |SUPPORT beam becomes a stop that is slack until squashed to 70 %');
   check(r.report.selfTest.stable, 'drop test passes');
+  const bodyBeam = D.beams.find((x) => x.a === 'b0l' && x.b === 't0l');
+  const bl = Math.hypot(...P('b0l').map((v, i) => v - P('t0l')[i]));
+  check(bodyBeam && Math.abs(bodyBeam.strength - (bodyBeam.deform + bodyBeam.spring * 0.5 * bl)) < 1, 'unbreakable body beams break after stretching 50 % (BeamNG deformLimitExpansion), not like toffee');
   check(require('./validate-truck.js').validate(r.truck).ok, '.truck passes the syntax checks');
 
   // 3D model: Collada -> OGRE mesh placed on the nodes exactly like RoR's FlexBody.cpp

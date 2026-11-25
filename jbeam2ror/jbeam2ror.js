@@ -20,7 +20,7 @@
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v28';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v29';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -960,6 +960,15 @@
       const key = [a, b].map(String).sort().join('|');
       if (beamKeys.has(key)) continue; // identical node pair already present
       beamKeys.add(key);
+      // BeamNG breaks a beam once it has stretched to deformLimitExpansion x its length (and
+      // "unbreakable" body beams rely on that). RoR has no such limit, but it takes strength
+      // away as a beam stretches (by stretch x stiffness), so a strength of deform + that
+      // amount breaks it at the same point instead of letting it stretch like toffee.
+      if (type !== 'SUPPORT' && bp.deform < BIG && bp.spring > 0) {
+        const given = num(props.deformLimitExpansion, NaN);
+        const limit = isFinite(given) && given > 1 ? given : (bp.strength >= 1e8 ? 1.5 : NaN);
+        if (isFinite(limit)) bp.strength = Math.min(bp.strength, bp.deform + bp.spring * (limit - 1) * L);
+      }
       beams.push({ a: String(a), b: String(b), ...bp, support: type === 'SUPPORT' });
     }
     if (skippedBeams) warn(`${skippedBeams} beam(s) referenced nodes that don't exist in this configuration and were skipped`);
