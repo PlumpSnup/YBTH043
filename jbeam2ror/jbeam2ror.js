@@ -20,7 +20,7 @@
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v23';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v24';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -3001,9 +3001,8 @@
     // Props crash RoR 2026.01 on spawn in some combinations (found with test builds), so
     // they're only added when asked for (opts.props: 'all' | 'static' | 'steering' | 'gauges').
     const propMode = opts.props || 'all';
-    // Gauge needles point the wrong way until calibrated against the dial texture: only with opts.needles
     const isNeedle = (pr) => /^(wheelspeed|rpm|rpmtacho|fuel|watertemp|oiltemp)$/i.test(pr.func) && /needle|gauge|tacho|speedo/i.test(pr.mesh);
-    const propWanted = (pr) => (opts.needles || !isNeedle(pr)) && (propMode === 'all' || propMode === 'static' || (propMode === 'steering' && pr.func.toLowerCase() === 'steering') || (propMode === 'gauges' && pr.func.toLowerCase() !== 'steering' && /wheelspeed|rpm|fuel|temp|throttle|brake|clutch|parkingbrake/i.test(pr.func)));
+    const propWanted = (pr) => (opts.needles !== false || !isNeedle(pr)) && (propMode === 'all' || propMode === 'static' || (propMode === 'steering' && pr.func.toLowerCase() === 'steering') || (propMode === 'gauges' && pr.func.toLowerCase() !== 'steering' && /wheelspeed|rpm|fuel|temp|throttle|brake|clutch|parkingbrake/i.test(pr.func)));
     for (const pr of (plan.props || []).filter(propWanted)) {
       const e = owner.get(pr.mesh);
       const item = e ? daeFor(e).meshes.get(pr.mesh) : null;
@@ -3042,6 +3041,9 @@
         else if (f === 'fuel') staticDeg = k * (clamp(0.7) + pr.offset); // fuel is a 0-1 fraction; shown at 70 %
         else if (f === 'watertemp' || f === 'oiltemp') staticDeg = k * (clamp(90) + pr.offset);
       }
+      // Gauge needles: checked against the Mistral's dial texture, BeamNG's needle angle is
+      // measured from the opposite end of the needle (rate and direction already match)
+      if (isNeedle(pr)) staticDeg += 180;
       const frame = frameNear(pivot, [pr.ref, pr.nx, pr.ny]);
       if (!frame) continue;
       const subs = g.subs.map((s2) => ({ material: s2.material, ogreMaterial: ogreMaterial(s2.material), idx: s2.idx }));
