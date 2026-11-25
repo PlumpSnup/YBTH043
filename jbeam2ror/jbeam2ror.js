@@ -20,7 +20,7 @@
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v31';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v32';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -37,14 +37,14 @@
     J: 'Traction control on + 60 % more tyre grip',
     K: 'Steering link damped 10x more (against front-end wobble)',
     L: 'Rear-wheel drive only (front axle not driven)',
-    M: 'Lighter wheels: tyre nodes 1.6 kg instead of 2.2 kg',
+    M: 'Tyre nodes 1.6 kg (now the default)',
     N: 'All of K, L and M together',
     O: 'Even lighter wheels: tyre nodes 1.3 kg',
     P: 'Light wheels like BeamNG: tyre nodes 1.1 kg (less rolling drag, may shake)',
     Q: 'Very light wheels: tyre nodes 0.8 kg (least rolling drag, may shake)',
   };
   // The builds offered in the test pack right now (the wheel tests A-E are settled)
-  const PACK = ['M', 'P', 'Q'];
+  const PACK = ['O'];
 
   // BeamNG defaults (used when a JBeam file does not set a value).
   const BNG = {
@@ -1261,7 +1261,9 @@
       // tyre contact is harsher than any model we could check against), while 2.2 kg holds.
       // Make the wheel at least that heavy; the extra is taken off the body below so the
       // car keeps BeamNG's total weight.
-      const treadKg = X === 'Q' ? 0.8 : X === 'P' ? 1.1 : X === 'O' ? 1.3 : X === 'M' || X === 'N' || opts.lightWheels ? 1.6 : 2.2;
+      // 1.6 kg: tested in RoR on the Mistral and ETK - lighter (1.1, 0.8) exploded, heavier
+      // (2.2) adds so much rolling drag that cars stall around 90 km/h
+      const treadKg = X === 'Q' ? 0.8 : X === 'P' ? 1.1 : X === 'O' ? 1.3 : X === 'C' ? 4.4 : 1.6;
       const minTread = treadKg * 2 * rays;
       if (X === 'P' || X === 'Q') mass = minTread; // exactly this light, even if BeamNG's wheel is heavier
       if (mass < minTread) { addedWheelMass += minTread - mass; mass = minTread; }
