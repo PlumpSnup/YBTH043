@@ -20,7 +20,7 @@
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v25';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v26';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -726,7 +726,20 @@
           if (!Array.isArray(row)) continue;
           const slotName = row[iName >= 0 ? iName : 0];
           if (typeof slotName !== 'string') continue;
-          let chosen = Object.prototype.hasOwnProperty.call(pcParts, slotName) ? pcParts[slotName] : row[iDef >= 0 ? iDef : 1];
+          const slotDefault = row[iDef >= 0 ? iDef : 1];
+          let chosen = Object.prototype.hasOwnProperty.call(pcParts, slotName) ? pcParts[slotName] : slotDefault;
+          // An outdated configuration can name a part the mod no longer has (renamed): like
+          // BeamNG, fall back to the slot's default part when that one exists.
+          if (typeof chosen === 'string' && chosen && !lib.parts.has(chosen) && !/^(tire|wheel)_/i.test(chosen)) {
+            // renamed into variants (e.g. x_wide -> x_wide_LHD / x_wide_RHD): take the closest one
+            const fits = (n) => { const st = lib.parts.get(n).part.slotType; return st === slotName || (Array.isArray(st) && st.includes(slotName)); };
+            const variants = [...lib.parts.keys()].filter((n) => n.startsWith(chosen + '_') && fits(n)).sort((a, b) => (/_LHD$/i.test(b) ? 1 : 0) - (/_LHD$/i.test(a) ? 1 : 0) || a.length - b.length);
+            const pick = variants[0] || (typeof slotDefault === 'string' && slotDefault !== chosen && lib.parts.has(slotDefault) ? slotDefault : null);
+            if (pick) {
+              warn(`The configuration asks for part "${chosen}", which this mod doesn't have (renamed?); used "${pick}" instead.`);
+              chosen = pick;
+            }
+          }
           if (typeof chosen !== 'string' || chosen === '') continue;
           const own = isDict(row[row.length - 1]) ? row[row.length - 1] : null;
           const opt = own || slotOptions ? Object.assign({}, slotOptions || {}, own || {}) : null;
@@ -899,7 +912,11 @@
         const lbM = isBounded ? rangeOr('longBoundRange', 'beamLongBound', 1) : 10 * L0;
         const limitK = isBounded ? Math.max(0, num(props.beamLimitSpring, 0)) : 0;
         const limitD = isBounded ? Math.max(0, num(props.beamLimitDamp, 0)) : 0;
-        if (isBounded && limitK > 0 && bp.spring < 0.05 * limitK && Math.max(sbM, lbM) <= 0.02) {
+        // Free play given as a fraction of the length (beamShortBound 0.04 = 4 %) is real travel,
+        // e.g. a sliding driveshaft; only tiny play given in metres is a hinge/latch.
+        const ratioBounds = !isFinite(num(props.shortBoundRange, NaN)) && !isFinite(num(props.longBoundRange, NaN));
+        const noPlay = ratioBounds ? Math.max(num(props.beamShortBound, 1), num(props.beamLongBound, 1)) <= 0.01 : Math.max(sbM, lbM) <= 0.012;
+        if (isBounded && limitK > 0 && bp.spring < 0.05 * limitK && noPlay) {
           // A limiter with (almost) no free play: hinge, latch or mount. Same as a stiff beam.
           const key = [a, b].map(String).sort().join('|');
           if (!beamKeys.has(key)) {
@@ -961,6 +978,43 @@
       } else {
         beams.push({ a: String(a), b: String(b), ...bp, support: false });
       }
+    }
+
+    // -- torsion hydros (BeamNG twists node id1 around the axis id2-id3, angle measured
+    // against id4). RoR has none: a steering one becomes a normal steering hydro from id1 to
+    // id4 whose length change gives the same twist.
+    for (const { cols, props } of rowsOf('torsionHydros')) {
+      const ids = [cols.id1, cols.id2, cols.id3, cols.id4].map(String);
+      if (!ids.every(hasNode)) continue;
+      const src = String(props.inputSource || 'steering');
+      if (!/steer/i.test(src)) { warn(`A torsion hydro driven by "${src}" (e.g. a gear lever) has no RoR equivalent and was left out`); continue; }
+      const [p1, a1, a2] = ids.slice(0, 3).map((id) => nodes.get(id).pos);
+      const axis = v3.norm(v3.sub(a2, a1));
+      // BeamNG's angle reference node often sits straight out along the arm, where a length
+      // change can't tell left from right. Use a node that holds the steering box (same groups
+      // as the axis nodes) and sits sideways to the arm's swing instead.
+      const tang = v3.norm(v3.cross(axis, v3.sub(p1, a1)));
+      const boxGroups = new Set([...nodes.get(ids[1]).groups, ...nodes.get(ids[2]).groups].filter((gname) => !/pitman|draglink|tierod/i.test(gname)));
+      let refId = ids[3], bestScore = Math.abs(v3.dot(v3.norm(v3.sub(nodes.get(ids[3]).pos, p1)), tang));
+      for (const nd of nodes.values()) {
+        if (ids.includes(nd.id) || !nd.groups.some((gname) => boxGroups.has(gname) || /frame|chassis|body/i.test(gname))) continue;
+        const d = v3.len(v3.sub(nd.pos, p1));
+        if (d < 0.12 || d > 0.9) continue;
+        const sc = Math.abs(v3.dot(v3.norm(v3.sub(nd.pos, p1)), tang)) - d * 0.05;
+        if (sc > bestScore + 0.05) { bestScore = sc; refId = nd.id; }
+      }
+      ids[3] = refId;
+      const ref = nodes.get(refId).pos;
+      const rot = (p, th) => { const v = v3.sub(p, a1), c = Math.cos(th), sn = Math.sin(th); return v3.add(a1, v3.add(v3.add(v3.scale(v, c), v3.scale(v3.cross(axis, v), sn)), v3.scale(axis, v3.dot(axis, v) * (1 - c)))); };
+      const f = num(props.factor, 0.5) * num(props.inputFactor, 1);
+      const L0 = v3.len(v3.sub(ref, p1));
+      const Lr = v3.len(v3.sub(ref, rot(p1, -f))); // BeamNG: angle = factor * input (radians); full right lock = -factor (checked in the drop-test sim: wheels turn right)
+      const r = v3.len(v3.cross(v3.sub(p1, a1), axis));
+      if (L0 < 0.02 || r < 0.01 || Math.abs(Lr - L0) < 1e-4) { warn('A steering torsion hydro could not be converted (its reference node is in line with the arm)'); continue; }
+      const kT = num(props.spring, 350000);
+      steeringHydros.push({ a: ids[0], b: ids[3], torsion: true, rorFactor: (L0 - Lr) / L0, wheelLock: num(props.steeringWheelLock, 0),
+        spring: Math.min(9e6, Math.max(3e5, kT / (r * r))), damp: Math.max(200, num(props.damp, 10) / (r * r)), deform: BIG, strength: BIG });
+      warn(`Steering uses a BeamNG torsion hydro (twisting the steering box); converted to a steering hydro ${ids[0]}-${ids[3]}`);
     }
 
     // -- unsupported sections ------------------------------------------------
@@ -1219,7 +1273,8 @@
         if (d < bd) { bd = d; best = w; }
       }
       let factor;
-      if (best && bd < 0.8 && L0 > 0.02) {
+      if (h.torsion) factor = Math.max(-0.5, Math.min(0.5, h.rorFactor));
+      else if (best && bd < 0.8 && L0 > 0.02) {
         // The end nearer the wheel is the steering arm; shortening pulls it toward the other end.
         const nearA = v3.len(v3.sub(A, best.center)) <= v3.len(v3.sub(B, best.center));
         const P = nearA ? A : B, Q = nearA ? B : A;
@@ -1871,6 +1926,7 @@
       springs.push({ i, j, k, c, L0: L * precomp, Lr: L, deform, shock: shock || null });
     };
     const brokenLog = [];
+    let deformEvents = 0, lateDeform = 0;
     for (const b of beams) { const n0 = springs.length; addSpring(b.a, b.b, b.spring, b.damp, 1, b.deform); if (springs.length > n0) { const sp = springs[springs.length - 1]; sp.support = !!b.support; sp.strength = b.strength; sp.name = b.a + '-' + b.b; } }
     for (const s of shocks) addSpring(s.a, s.b, s.spring, s.damp, s.precomp, Infinity, s);
     const hydroStart = springs.length;
@@ -2057,11 +2113,15 @@
           if (x > 0) { k += (sp.shock.hardK - k) * x; c += (sp.shock.hardD - c) * x; if (!(x <= (sp.maxX || 0))) { sp.maxX = x; sp.maxF = k * diff; } }
         }
         let f = k * diff + c * vr;
-        // plastic deformation like BeamNG/RoR: past the threshold the rest length gives way
-        if (!sp.shock && Math.abs(sp.k * diff) > sp.deform) {
+        // plastic deformation as in RoR (ActorForcesEuler): the test uses the spring AND damper
+        // force, so vibration alone can bend beams with low thresholds
+        if (!sp.shock && sp.k > 0 && Math.abs(f) > sp.deform && Math.sign(f) === Math.sign(diff)) {
           const lim = Math.sign(diff) * sp.deform;
           sp.L0 = L - lim / sp.k;
-          f = lim + c * vr;
+          f = lim + (f - lim) * 0.5;
+          deformEvents++;
+          if (extra.deformLog) extra.deformLog.set(sp.name, (extra.deformLog.get(sp.name) || 0) + 1);
+          if (s * dt > 0.5) lateDeform++;
         }
         if (extra.breaking && sp.strength !== undefined && Math.abs(f) > sp.strength) { sp.k = 0; sp.c = 0; sp.strength = undefined; sp.broken = true; brokenLog.push([+(s * dt).toFixed(3), sp.name, Math.round(Math.abs(f))]); f = 0; }
         if (sp.broken) continue;
@@ -2151,7 +2211,7 @@
       });
     }
     const overshoots = springs.filter((sp) => sp.shock && sp.maxX > 0).map((sp) => ({ a: ids[sp.i], b: ids[sp.j], x: sp.maxX, F: sp.maxF })).sort((p, q) => Math.abs(q.F) - Math.abs(p.F));
-    return { stable, overshoots, broken: brokenLog, engine: extra.drive ? eng : undefined, contact, fastest, watched, probe, firstBlow, maxSpeedMid: +maxSpeedMid.toFixed(3), maxSpeedLate: +maxSpeedLate.toFixed(3), maxStrain: +maxStrain.toFixed(3), collapsedBeams: collapsed, hotNodes, seconds: +(steps * dt).toFixed(1) };
+    return { deformEvents, lateDeform, stable, overshoots, broken: brokenLog, engine: extra.drive ? eng : undefined, contact, fastest, watched, probe, firstBlow, maxSpeedMid: +maxSpeedMid.toFixed(3), maxSpeedLate: +maxSpeedLate.toFixed(3), maxStrain: +maxStrain.toFixed(3), collapsedBeams: collapsed, hotNodes, seconds: +(steps * dt).toFixed(1) };
   }
 
   /**
@@ -2893,29 +2953,23 @@
     const hiddenMat = `j2r/${prefix}/hidden`;
     const tyreMat = `j2r/${prefix}/tyre`;
     const tyred = [];
-    for (const [w, rims] of rimOf) {
+    const rimMat = `j2r/${prefix}/rim`;
+    let rimsMade = 0;
+    // A mesh turned around the wheel axle from a profile of [axial (x half-width), radius]
+    // points, attached to the wheel's tread nodes like the other wheel parts.
+    function lathe(w, prof, t0, h, mat, label, normalCentre) {
       const c = w.center, a = w.axis;
-      let rimR = 0, axSum = 0, axN = 0;
-      const radial = (q) => { const d = [q[0] - c[0], q[1] - c[1], q[2] - c[2]]; const t = dot(d, a); return [Math.hypot(d[0] - a[0] * t, d[1] - a[1] * t, d[2] - a[2] * t), t]; };
-      for (const arr of rims) for (let v = 0; v < arr.length; v += 3) { const [r0] = radial([arr[v], arr[v + 1], arr[v + 2]]); if (r0 > rimR) rimR = r0; }
-      for (const arr of rims) for (let v = 0; v < arr.length; v += 3) { const [r0, t] = radial([arr[v], arr[v + 1], arr[v + 2]]); if (r0 > rimR * 0.9) { axSum += t; axN++; } }
-      const R = w.radius;
-      if (!(rimR > 0.05) || rimR > R * 0.97) continue;
-      const ri = rimR * 0.97, d = R - ri;
-      const h = Math.max(0.06, (w.tireWidth > 0.05 ? w.tireWidth : Math.hypot(...sub(P0(w.n2), P0(w.n1)))) / 2);
-      const t0 = axN ? axSum / axN : 0;
-      const prof = [[-0.86, ri], [-0.97, ri + 0.15 * d], [-1, ri + 0.5 * d], [-0.96, ri + 0.84 * d], [-0.84, R - 0.012], [-0.62, R], [0.62, R], [0.84, R - 0.012], [0.96, ri + 0.84 * d], [1, ri + 0.5 * d], [0.97, ri + 0.15 * d], [0.86, ri]];
       const segs = 48;
       const u = norm(Math.abs(a[1]) < 0.9 ? cross(a, [0, 1, 0]) : cross(a, [1, 0, 0])), vv = cross(a, u);
       const pos = [], nrm = [], uv = [], idx = [];
-      const midR = (R + ri) / 2;
       for (let sgi = 0; sgi <= segs; sgi++) {
         const ang = 2 * Math.PI * sgi / segs, ca = Math.cos(ang), sa = Math.sin(ang);
         const dir = [u[0] * ca + vv[0] * sa, u[1] * ca + vv[1] * sa, u[2] * ca + vv[2] * sa];
         for (const [tt, rr] of prof) {
           const ax = t0 + tt * h;
           pos.push(c[0] + a[0] * ax + dir[0] * rr, c[1] + a[1] * ax + dir[1] * rr, c[2] + a[2] * ax + dir[2] * rr);
-          const nr = norm([dir[0] * (rr - midR) + a[0] * tt * h * 1.5, dir[1] * (rr - midR) + a[1] * tt * h * 1.5, dir[2] * (rr - midR) + a[2] * tt * h * 1.5]);
+          const [nr0, nt0] = normalCentre(tt, rr);
+          const nr = norm([dir[0] * nr0 + a[0] * nt0, dir[1] * nr0 + a[1] * nt0, dir[2] * nr0 + a[2] * nt0]);
           nrm.push(...nr); uv.push(sgi / segs, 0);
         }
       }
@@ -2930,15 +2984,47 @@
         lp[v * 3] = dot(dd, fax); lp[v * 3 + 1] = dot(dd, fnorm); lp[v * 3 + 2] = dot(dd, faz);
         ln[v * 3] = dot(nn, fax); ln[v * 3 + 1] = dot(nn, fnorm); ln[v * 3 + 2] = dot(nn, faz);
       }
-      const meshName = `${prefix}-tyre-${w.name.replace(/[^A-Za-z0-9_]+/g, '_')}.mesh`;
-      meshFiles.push({ path: meshName, data: writeOgreMesh(lp, ln, Float64Array.from(uv), [{ material: 'tyre', ogreMaterial: tyreMat, idx }]) });
+      const meshName = `${prefix}-${label}-${w.name.replace(/[^A-Za-z0-9_]+/g, '_')}.mesh`;
+      meshFiles.push({ path: meshName, data: writeOgreMesh(lp, ln, Float64Array.from(uv), [{ material: label, ogreMaterial: mat, idx }]) });
       totalVerts += nV; totalTris += idx.length / 3;
-      lines.push(`; tyre ${w.name} (built to fit the rim)`);
+      lines.push(`; ${label} ${w.name} (built for the wheel)`);
       lines.push(`${plan.num(w.n1)}, ${plan.num(w.n2)}, ${plan.num(w.arm)}, 0, 0, 0, 0, 0, 0, ${meshName}`);
       lines.push(`forset ${ranges([...w.tread, w.n1, w.n2])}`);
-      if (opts.previewData) (result.preview = result.preview || []).push({ mesh: 'tyre', world: Float64Array.from(pos), idx: [idx] });
+      if (opts.previewData) (result.preview = result.preview || []).push({ mesh: label, world: Float64Array.from(pos), idx: [idx] });
+    }
+    for (const w of opts.skipWheels ? [] : plan.wheels || []) {
+      const rims = rimOf.get(w) || null;
+      const c = w.center, a = w.axis;
+      const R = w.radius;
+      const h = Math.max(0.06, (w.tireWidth > 0.05 ? w.tireWidth : Math.hypot(...sub(P0(w.n2), P0(w.n1)))) / 2);
+      let rimR = 0, t0 = 0;
+      if (rims) {
+        let axSum = 0, axN = 0;
+        const radial = (q) => { const d = [q[0] - c[0], q[1] - c[1], q[2] - c[2]]; const t = dot(d, a); return [Math.hypot(d[0] - a[0] * t, d[1] - a[1] * t, d[2] - a[2] * t), t]; };
+        for (const arr of rims) for (let v = 0; v < arr.length; v += 3) { const [r0] = radial([arr[v], arr[v + 1], arr[v + 2]]); if (r0 > rimR) rimR = r0; }
+        for (const arr of rims) for (let v = 0; v < arr.length; v += 3) { const [r0, t] = radial([arr[v], arr[v + 1], arr[v + 2]]); if (r0 > rimR * 0.9) { axSum += t; axN++; } }
+        t0 = axN ? axSum / axN : 0;
+        if (!(rimR > 0.05) || rimR > R * 0.97) continue;
+      } else {
+        // The rim model is a base-game part: build a plain steel rim to go with the tyre
+        rimR = w.rimRadius > 0.08 && w.rimRadius < R * 0.9 ? w.rimRadius : R * 0.62;
+        const out = Math.sign(dot(a, [Math.sign(c[0]) || 1, 0, 0])) || 1; // +1 if the axle points outward
+        const rr = rimR * 0.98;
+        const rimProf = [[-0.85, rr * 0.94], [-0.88, rr], [0.88, rr], [0.85, rr * 0.94]];
+        lathe(w, rimProf, 0, h, rimMat, 'rim', (tt, r0) => [1, 0]);
+        // the wheel face: a dish from the rim lip to a centre hub, on the outer side
+        const f = out;
+        const faceProf = [[0.82 * f, rr * 0.93], [0.6 * f, rr * 0.72], [0.55 * f, rr * 0.45], [0.62 * f, rr * 0.3], [0.7 * f, rr * 0.18], [0.72 * f, 0.001]];
+        lathe(w, faceProf, 0, h, rimMat, 'rimface', () => [0.15, f]);
+        rimsMade++;
+      }
+      const ri = rimR * 0.97, d = R - ri;
+      const prof = [[-0.86, ri], [-0.97, ri + 0.15 * d], [-1, ri + 0.5 * d], [-0.96, ri + 0.84 * d], [-0.84, R - 0.012], [-0.62, R], [0.62, R], [0.84, R - 0.012], [0.96, ri + 0.84 * d], [1, ri + 0.5 * d], [0.97, ri + 0.15 * d], [0.86, ri]];
+      const midR = (R + ri) / 2;
+      lathe(w, prof, t0, h, tyreMat, 'tyre', (tt, rr) => [rr - midR, tt * h * 1.5]);
       tyred.push(w.name);
     }
+    if (rimsMade) note(`${rimsMade} wheel(s) use a rim model from the base game; a plain steel rim was built instead.`);
     // ---- props (steering wheel, gauge needles, pedals), working mirrors, lights ----
     const propLines = [];
     const flareLines = [];
@@ -3160,6 +3246,7 @@
     for (const name of tyred) result.truck = result.truck.replace(new RegExp(`, tracks/wheelface, tracks/wheelband1 ;${name.replace(/[^A-Za-z0-9_]/g, '\\$&')}$`, 'm'), `, ${hiddenMat}, ${hiddenMat} ;${name}`);
     if (tyred.length) {
       ogreMats.set('#hidden', { name: hiddenMat, text: [`material ${hiddenMat}`, '{', '\ttechnique', '\t{', '\t\tpass', '\t\t{', '\t\t\tcolour_write off', '\t\t\tdepth_write off', '\t\t}', '\t}', '}', ''].join('\n') });
+      ogreMats.set('#rim', { name: rimMat, text: [`material ${rimMat}`, '{', '\treceive_shadows on', '\ttechnique', '\t{', '\t\tpass', '\t\t{', '\t\t\tambient 0.45 0.46 0.48', '\t\t\tdiffuse 0.55 0.56 0.58 1', '\t\t\tspecular 0.6 0.6 0.6 1 40', '\t\t\tcull_hardware none', '\t\t}', '\t}', '}', ''].join('\n') });
       ogreMats.set('#tyre', { name: tyreMat, text: [`material ${tyreMat}`, '{', '\treceive_shadows on', '\ttechnique', '\t{', '\t\tpass', '\t\t{', '\t\t\tambient 0.07 0.07 0.07', '\t\t\tdiffuse 0.07 0.07 0.07 1', '\t\t\tspecular 0.12 0.12 0.12 1 10', '\t\t\tcull_hardware none', '\t\t}', '\t}', '}', ''].join('\n') });
     }
     const matFile = result.files.find((f) => /\.material$/.test(f.path));
