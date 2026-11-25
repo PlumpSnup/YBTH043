@@ -20,7 +20,7 @@
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v26';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v27';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -35,9 +35,13 @@
     H: 'RoR\'s own gearbox defaults (no clutch, flywheel or shift-time tuning)',
     I: 'Traction control on + 30 % more tyre grip',
     J: 'Traction control on + 60 % more tyre grip',
+    K: 'Steering link damped 10x more (against front-end wobble)',
+    L: 'Rear-wheel drive only (front axle not driven)',
+    M: 'Lighter wheels: tyre nodes 1.6 kg instead of 2.2 kg',
+    N: 'All of K, L and M together',
   };
   // The builds offered in the test pack right now (the wheel tests A-E are settled)
-  const PACK = ['D', 'I', 'J'];
+  const PACK = ['K', 'L', 'M', 'N'];
 
   // BeamNG defaults (used when a JBeam file does not set a value).
   const BNG = {
@@ -1233,7 +1237,7 @@
       // tyre contact is harsher than any model we could check against), while 2.2 kg holds.
       // Make the wheel at least that heavy; the extra is taken off the body below so the
       // car keeps BeamNG's total weight.
-      const minTread = 2.2 * 2 * rays;
+      const minTread = (X === 'M' || X === 'N' ? 1.6 : 2.2) * 2 * rays;
       if (mass < minTread) { addedWheelMass += minTread - mass; mass = minTread; }
       const nodeMass = mass / (2 * rays);
       const psi = num(p.pressurePSI, 30);
@@ -1495,6 +1499,9 @@
       driveTest = { ok: !st.firstBlow && dist > 2, metres: +dist.toFixed(1), seconds: +((p1[0] - p0[0]) || 0).toFixed(1), exploded: !!st.firstBlow };
       if (!driveTest.ok) warn(driveTest.exploded ? 'Drive test: the driven wheels became unstable under full throttle. Expect shaking when accelerating hard.' : 'Drive test: the car barely moved under full throttle in first gear.');
     }
+
+    if (X === 'K' || X === 'N') for (const h of steering) h.damp *= 10;
+    if (X === 'L' || X === 'N') for (const w of wheels) if (v3.dot(v3.sub(w.center, center), fwd) > 0 && wheels.some((o) => o.propulsed && v3.dot(v3.sub(o.center, center), fwd) < 0)) w.propulsed = 0;
 
     // -- write the .truck ----------------------------------------------------
     // Exhaust: RoR plays the engine sound at the node marked 'x' (otherwise at node 0).
@@ -1839,6 +1846,7 @@
     const steeringLock = Math.max(0, ...steering.map((h) => h.wheelLock || 0)) || 450;
     const visualPlan = { model: veh.model, flexbodies, paint, materialAlias, props: propRows, glow, steeringLock, shiftUpRPM: engine ? engine.shiftUp : 6000, fwd, up, nodes: planNodes, bodyNodes, wheels: planWheels, num: String };
     return {
+      _engine: opts.debug ? engine : undefined,
       _debug: opts.debug ? { nodes, beams, shocks, steeringHydros, steering, wheels, slidenodes, up } : undefined,
       truck,
       fileBase,
@@ -1950,7 +1958,7 @@
         const cs = extra.steer * Math.min(1, (s * dt - 1) / 0.5);
         for (const h of hydroSprings) h.sp.L0 = h.L * (1 - cs * h.factor);
       }
-      if (extra.probe && s % 200 === 0) {
+      if (extra.probe && s % (extra.probeEvery || 200) === 0) {
         const [pa, pb] = extra.probe.map((id) => ix.get(id));
         probe.push([+(s * dt).toFixed(2), Math.atan2(pos[pb * 3 + 2] - pos[pa * 3 + 2], pos[pb * 3] - pos[pa * 3]) * 180 / Math.PI, pos[pa * 3 + 1], pos[pa * 3], pos[pa * 3 + 2], Math.hypot(pos[pb * 3] - pos[pa * 3], pos[pb * 3 + 1] - pos[pa * 3 + 1], pos[pb * 3 + 2] - pos[pa * 3 + 2])]);
       }
@@ -2727,18 +2735,18 @@
     function lightType(key) {
       const gl = glow[key];
       if (!gl) return null;
-      const f = gl.funcs.map((x) => String(x).toLowerCase());
-      // dashboard warning lamps: no lights_ prefix and switched to/from BeamNG's invisible or gauge material
-      const dash = /^invis|gauge/i.test(String(gl.off || '')) || /^invis|gauge/i.test(String(gl.on || ''));
-      if (!f.some((x) => x.startsWith('lights_')) && (dash || !f.some((x) => /lowbeam|highbeam|brake|reverse|signal_[lr]$|fog|lowhighbeam|running|tail/.test(x)))) return null;
-      if (f.some((x) => /signal_l$/.test(x))) return 'l';
-      if (f.some((x) => /signal_r$/.test(x))) return 'r';
+      // dashboard warning/indicator lamps switch a dashboard or gauge material, or BeamNG's invisible one
+      if (/^invis|lamp|gauge|dial|decal|cluster|dash/i.test(String(gl.off || '')) || /^invis|lamp|gauge|dial|decal|cluster|dash/i.test(String(gl.on || ''))) return null;
+      // function names vary: lights_lowbeam, lowbeam, signal_L_filament, lowhighbeam_filament_alt ...
+      const f = gl.funcs.map((x) => String(x).toLowerCase().replace(/^lights_/, '').replace(/_?(filament|alt|light)+$/g, '').replace(/_+$/, ''));
+      if (!f.length) return null;
+      if (f.some((x) => /signal_?l$|turn_?l$|blinker_?l$/.test(x))) return 'l';
+      if (f.some((x) => /signal_?r$|turn_?r$|blinker_?r$/.test(x))) return 'r';
       if (f.some((x) => /brake/.test(x))) return 'b';
       if (f.some((x) => /reverse/.test(x))) return 'R';
       if (f.some((x) => /fog/.test(x))) return 'g';
-      if (f.some((x) => /lights_lowbeam/.test(x))) return 'f';
-      if (f.some((x) => /lights_highbeam/.test(x))) return 'h';
-      if (f.some((x) => /lowhighbeam|running|parking|tail/.test(x))) return 't';
+      if (f.some((x) => /^lowbeam$|^highbeam$/.test(x)) || (f.some((x) => /lowhighbeam|beam/.test(x)) && /head|beam/i.test(key))) return 'f';
+      if (f.some((x) => /lowhighbeam|running|parking|tail|position/.test(x))) return 't'; // front ones become white sidelights
       return null;
     }
     const isTail = (key) => !!glow[key] && glow[key].funcs.some((x) => /lowhighbeam|running|tail/i.test(x));
@@ -3219,7 +3227,9 @@
         const o = solve3([best.dx, best.dy, best.nn], sub(p, P0(best.f[0])));
         if (!o) continue;
         const size = type === 'f' || type === 'h' ? 0.6 : type === 'g' ? 0.45 : 0.35;
-        flareLines.push(`${best.f.map(plan.num).join(', ')}, ${fixed(o[0])}, ${fixed(o[1])}, 1, ${type}, -1, ${type === 'l' || type === 'r' ? -1 : 0}, ${size}, default`);
+        // a lamp lit with the headlights at the front is a (white) sidelight, at the back a tail light
+        const ftype = type === 't' && along(p) > 0 ? 's' : type;
+        flareLines.push(`${best.f.map(plan.num).join(', ')}, ${fixed(o[0])}, ${fixed(o[1])}, 1, ${ftype}, -1, ${type === 'l' || type === 'r' ? -1 : 0}, ${size}, default`);
         made.push(nFlares++);
         // brake lamps that are also tail lamps: a tail flare too, so they glow at night
         if (type === 'b' && c2.tail) { flareLines.push(`${best.f.map(plan.num).join(', ')}, ${fixed(o[0])}, ${fixed(o[1])}, 1, t, -1, 0, 0.25, default`); nFlares++; }

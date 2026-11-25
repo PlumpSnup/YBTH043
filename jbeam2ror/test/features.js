@@ -23,7 +23,7 @@ const parts = {
     slotType: 'car_body',
     nodes: [['id', 'posX', 'posY', 'posZ'], { nodeWeight: 20, group: 'car_body' }, ...box, { group: '' }],
     flexbodies: [['mesh', '[group]:', 'nonFlexMaterials'], ['car_shell', ['car_body'], []], ['car_rim', ['wheel_FL'], []], ['not_in_dae', ['car_body'], []]],
-    glowMap: { car_lamp: { off: 'car_paint', on: 'car_lamp_on', simpleFunction: 'lights_brake' } },
+    glowMap: { car_lamp: { off: 'car_paint', on: 'car_lights_on', simpleFunction: 'lights_brake' }, signal_L: { off: 'car_dashlamp', on: 'car_dashlamp_on', simpleFunction: 'signal_L' } },
     props: [['func', 'mesh', 'idRef:', 'idX:', 'idY:', 'baseRotation', 'rotation', 'translation', 'min', 'max', 'offset', 'multiplier'],
       ['steering', 'car_steer', 'b1l', 'b1r', 't1l', { x: 0, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }, { x: 0, y: 0, z: 0 }, -1000, 1000, 0, 1],
       ['wheelspeed', 'car_needle', 'b1l', 'b1r', 't1l', { x: 0, y: 0, z: 0 }, { x: 0, y: -4, z: 0 }, { x: 0, y: 0, z: 0 }, 0, 70, 2, 1]],
