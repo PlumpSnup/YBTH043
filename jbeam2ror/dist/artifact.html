@@ -202,7 +202,7 @@ footer p { margin: 0 0 6px; }
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v34';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v35';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -3879,9 +3879,10 @@ footer p { margin: 0 0 6px; }
       // one lamp per material and side (a material can cover both headlights) ...
       for (const t of tris) {
         const key = `${t.mat}|${t.p[0] > 0.12 ? 'L' : t.p[0] < -0.12 ? 'R' : 'C'}`;
-        if (!clusters.has(key)) clusters.set(key, { a: 0, p: [0, 0, 0], n: [0, 0, 0] });
+        if (!clusters.has(key)) clusters.set(key, { a: 0, p: [0, 0, 0], n: [0, 0, 0], pts: [] });
         const c2 = clusters.get(key);
         c2.a += t.a; c2.p = c2.p.map((x, i) => x + t.p[i] * t.a); c2.n = c2.n.map((x, i) => x + t.n[i]); c2.tail = c2.tail || t.tail;
+        if (c2.pts.length < 4000) c2.pts.push(t.p);
       }
       // ... then lens + housing of the same lamp (close together) become one
       const lamps = [];
@@ -3889,8 +3890,8 @@ footer p { margin: 0 0 6px; }
         if (c2.a < 1e-5) continue;
         const p = c2.p.map((x) => x / c2.a);
         const same = lamps.find((l2) => Math.hypot(...sub(l2.p, p)) < 0.25);
-        if (same) { const a2 = same.a + c2.a; same.p = same.p.map((x, i) => (x * same.a + p[i] * c2.a) / a2); same.n = same.n.map((x, i) => x + c2.n[i]); same.a = a2; same.tail = same.tail || c2.tail; }
-        else lamps.push({ a: c2.a, p, n: c2.n.slice(), tail: c2.tail });
+        if (same) { const a2 = same.a + c2.a; same.p = same.p.map((x, i) => (x * same.a + p[i] * c2.a) / a2); same.n = same.n.map((x, i) => x + c2.n[i]); same.a = a2; same.tail = same.tail || c2.tail; same.pts = same.pts.concat(c2.pts); }
+        else lamps.push({ a: c2.a, p, n: c2.n.slice(), tail: c2.tail, pts: c2.pts.slice() });
       }
       const made = [];
       for (const c2 of lamps) {
@@ -3920,15 +3921,25 @@ footer p { margin: 0 0 6px; }
         if (!best) continue;
         const o = solve3([best.dx, best.dy, best.nn], sub(p, P0(best.f[0])));
         if (!o) continue;
+        // RoR puts the flare on the plane of its three nodes (ref + ox*dx + oy*dy), usually inside
+        // the bodywork, then pulls it 0.1 m x (last offset) along -normal (= outward). Pull it to
+        // just in front of the outermost point of the lens so the housing doesn't hide it.
+        const outer = Math.max(0, ...c2.pts.map((q) => dot(sub(q, p), out)));
+        const onPlane = [0, 1, 2].map((i) => P0(best.f[0])[i] + o[0] * best.dx[i] + o[1] * best.dy[i]);
+        const target = [0, 1, 2].map((i) => p[i] + out[i] * (outer + 0.03));
+        const pull = Math.max(0.5, Math.min(30, dot(sub(target, onPlane), best.nn.map((x) => -x)) / 0.1));
         // negative size: RoR shows the glow from every angle (only headlights need a direction,
         // for their beam) - so a lamp whose lens faces an odd way is still seen
         const size = type === 'f' || type === 'h' ? 0.6 : type === 'g' ? -0.45 : -0.35;
         // a lamp lit with the headlights at the front is a (white) sidelight, at the back a tail light
         const ftype = type === 't' && along(p) > 0 ? 's' : type;
-        flareLines.push(`${best.f.map(plan.num).join(', ')}, ${fixed(o[0])}, ${fixed(o[1])}, 1, ${ftype}, -1, ${type === 'l' || type === 'r' ? -1 : 0}, ${size}, default`);
+        // headlights (positive size) get their pull scaled by the viewing angle in RoR, so a long
+        // pull would make the glow wander; then give up the beam and keep a fixed glow instead
+        const fsize = size > 0 && pull > 2.5 ? -size : size;
+        flareLines.push(`${best.f.map(plan.num).join(', ')}, ${fixed(o[0])}, ${fixed(o[1])}, ${fixed(pull, 2)}, ${ftype}, -1, ${type === 'l' || type === 'r' ? -1 : 0}, ${fsize}, default`);
         made.push(nFlares++);
         // brake lamps that are also tail lamps: a tail flare too, so they glow at night
-        if (type === 'b' && c2.tail) { flareLines.push(`${best.f.map(plan.num).join(', ')}, ${fixed(o[0])}, ${fixed(o[1])}, 1, t, -1, 0, -0.25, default`); nFlares++; }
+        if (type === 'b' && c2.tail) { flareLines.push(`${best.f.map(plan.num).join(', ')}, ${fixed(o[0])}, ${fixed(o[1])}, ${fixed(pull, 2)}, t, -1, 0, -0.25, default`); nFlares++; }
       }
       if (made.length) flareIndex.set(type, made[0]);
     }
