@@ -202,7 +202,7 @@ footer p { margin: 0 0 6px; }
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v33';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v34';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -3411,14 +3411,15 @@ footer p { margin: 0 0 6px; }
       const stages = def && Array.isArray(def.Stages) ? def.Stages.filter(isDict) : [];
       const s0 = stages[0] || {};
       const painted = stages.some((s) => s.instanceDiffuse === true);
-      let tex = null;
+      let tex = null, texMissing = false;
       for (const s of stages) {
         const r = s.baseColorMap || s.colorMap || s.diffuseMap;
-        if (r) { tex = findTexture(lib, r, found && found.file); if (!tex) missingTex.add(r); break; }
+        if (r) { tex = findTexture(lib, r, found && found.file); if (!tex) { missingTex.add(r); texMissing = true; } break; }
       }
       const hasFactor = Array.isArray(s0.baseColorFactor) || Array.isArray(s0.diffuseColor);
       let color = Array.isArray(s0.baseColorFactor) ? s0.baseColorFactor.slice(0, 3).map(Number) : Array.isArray(s0.diffuseColor) ? s0.diffuseColor.slice(0, 3).map(Number) : [1, 1, 1];
-      if (!tex && !hasFactor) color = [0.55, 0.55, 0.57]; // texture from the base game: plain grey, not white
+      // texture from the base game (or another car): plain grey, not white
+      if (!tex && (!hasFactor || texMissing)) color = texMissing && hasFactor ? color.map((c) => Math.min(0.55, c * 0.55)) : [0.55, 0.55, 0.57];
       // Paint: BeamNG lays the paint over the colour texture through a mask (the paint
       // stage's opacityMap). With the mask we bake the paint into the texture so trim and
       // chrome keep their colour; without it the whole material is tinted.
@@ -3919,13 +3920,15 @@ footer p { margin: 0 0 6px; }
         if (!best) continue;
         const o = solve3([best.dx, best.dy, best.nn], sub(p, P0(best.f[0])));
         if (!o) continue;
-        const size = type === 'f' || type === 'h' ? 0.6 : type === 'g' ? 0.45 : 0.35;
+        // negative size: RoR shows the glow from every angle (only headlights need a direction,
+        // for their beam) - so a lamp whose lens faces an odd way is still seen
+        const size = type === 'f' || type === 'h' ? 0.6 : type === 'g' ? -0.45 : -0.35;
         // a lamp lit with the headlights at the front is a (white) sidelight, at the back a tail light
         const ftype = type === 't' && along(p) > 0 ? 's' : type;
         flareLines.push(`${best.f.map(plan.num).join(', ')}, ${fixed(o[0])}, ${fixed(o[1])}, 1, ${ftype}, -1, ${type === 'l' || type === 'r' ? -1 : 0}, ${size}, default`);
         made.push(nFlares++);
         // brake lamps that are also tail lamps: a tail flare too, so they glow at night
-        if (type === 'b' && c2.tail) { flareLines.push(`${best.f.map(plan.num).join(', ')}, ${fixed(o[0])}, ${fixed(o[1])}, 1, t, -1, 0, 0.25, default`); nFlares++; }
+        if (type === 'b' && c2.tail) { flareLines.push(`${best.f.map(plan.num).join(', ')}, ${fixed(o[0])}, ${fixed(o[1])}, 1, t, -1, 0, -0.25, default`); nFlares++; }
       }
       if (made.length) flareIndex.set(type, made[0]);
     }
