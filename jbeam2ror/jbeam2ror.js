@@ -20,7 +20,7 @@
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v22';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v23';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -3001,7 +3001,9 @@
     // Props crash RoR 2026.01 on spawn in some combinations (found with test builds), so
     // they're only added when asked for (opts.props: 'all' | 'static' | 'steering' | 'gauges').
     const propMode = opts.props || 'all';
-    const propWanted = (pr) => propMode === 'all' || propMode === 'static' || (propMode === 'steering' && pr.func.toLowerCase() === 'steering') || (propMode === 'gauges' && pr.func.toLowerCase() !== 'steering' && /wheelspeed|rpm|fuel|temp|throttle|brake|clutch|parkingbrake/i.test(pr.func));
+    // Gauge needles point the wrong way until calibrated against the dial texture: only with opts.needles
+    const isNeedle = (pr) => /^(wheelspeed|rpm|rpmtacho|fuel|watertemp|oiltemp)$/i.test(pr.func) && /needle|gauge|tacho|speedo/i.test(pr.mesh);
+    const propWanted = (pr) => (opts.needles || !isNeedle(pr)) && (propMode === 'all' || propMode === 'static' || (propMode === 'steering' && pr.func.toLowerCase() === 'steering') || (propMode === 'gauges' && pr.func.toLowerCase() !== 'steering' && /wheelspeed|rpm|fuel|temp|throttle|brake|clutch|parkingbrake/i.test(pr.func)));
     for (const pr of (plan.props || []).filter(propWanted)) {
       const e = owner.get(pr.mesh);
       const item = e ? daeFor(e).meshes.get(pr.mesh) : null;
@@ -3075,7 +3077,8 @@
     let nFlares = 0;
     const flareTypesOrder = ['f', 'h', 'g', 't', 'b', 'R', 'l', 'r'];
     // opts.lights: true, or {beams: false} (no headlight beams), {lenses: false} (lenses don't glow)
-    const lightOpt = opts.lights === true ? {} : opts.lights || null;
+    // Default: flares and headlight beams; glowing lenses (materialflarebindings) crashed RoR 2026.01
+    const lightOpt = opts.lights === undefined ? { lenses: false } : opts.lights === true ? {} : opts.lights || null;
     for (const type of lightOpt ? flareTypesOrder.filter((t) => lightOpt.beams !== false || !['f', 'h', 'g'].includes(t)) : []) {
       const tris = lightTris.get(type) || [];
       const clusters = new Map();
