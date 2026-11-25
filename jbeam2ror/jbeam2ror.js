@@ -20,7 +20,7 @@
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v24';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v25';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -2668,7 +2668,9 @@
       const gl = glow[key];
       if (!gl) return null;
       const f = gl.funcs.map((x) => String(x).toLowerCase());
-      if (!f.some((x) => x.startsWith('lights_'))) return null; // dashboard warning lamps
+      // dashboard warning lamps: no lights_ prefix and switched to/from BeamNG's invisible or gauge material
+      const dash = /^invis|gauge/i.test(String(gl.off || '')) || /^invis|gauge/i.test(String(gl.on || ''));
+      if (!f.some((x) => x.startsWith('lights_')) && (dash || !f.some((x) => /lowbeam|highbeam|brake|reverse|signal_[lr]$|fog|lowhighbeam|running|tail/.test(x)))) return null;
       if (f.some((x) => /signal_l$/.test(x))) return 'l';
       if (f.some((x) => /signal_r$/.test(x))) return 'r';
       if (f.some((x) => /brake/.test(x))) return 'b';
@@ -2711,10 +2713,12 @@
       let alpha = 1;
       if (typeof s0.opacityFactor === 'number') alpha = s0.opacityFactor;
       else if (Array.isArray(s0.baseColorFactor) && s0.baseColorFactor.length > 3) alpha = +s0.baseColorFactor[3];
-      const translucent = def && def.translucent === true;
+      // Glass: some mods mark it translucent, others only name it glass/window and give it an opacity map
+      const glassy = /glass|window|windshield|windscreen/i.test(bngName) || /glass|window|windshield|windscreen/i.test(String((plan.materialAlias || {})[bngName] || ''));
+      const translucent = !!def && (def.translucent === true || (glassy && (!!s0.opacityMap || def.translucent !== false)));
       // BeamNG glass gets its see-through look from a separate opacity map; OGRE only has the
       // colour texture's alpha, so translucent materials with an opacity map get a fixed alpha.
-      if (translucent && s0.opacityMap && alpha >= 1) alpha = 0.35;
+      if (translucent && (s0.opacityMap || glassy) && alpha >= 1) alpha = 0.35;
       const L2 = [`material ${name}`, '{', '\treceive_shadows on', '\ttechnique', '\t{', '\t\tpass', '\t\t{'];
       if (/^invis/i.test(bngName) || /^invis/i.test((plan.materialAlias || {})[bngName] || '')) { // BeamNG's invisible helper material (e.g. dashboard lamps when off)
         ogreMats.set(bngName, { name, text: [`material ${name}`, '{', '\ttechnique', '\t{', '\t\tpass', '\t\t{', '\t\t\tcolour_write off', '\t\t\tdepth_write off', '\t\t}', '\t}', '}', ''].join('\n') });
