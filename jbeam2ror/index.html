@@ -359,7 +359,7 @@ footer p { margin: 0 0 6px; }
       </details>
       ${r.report.model ? `<details><summary>Help get the lights working: download a test pack</summary>
         <div style="padding:0 12px 12px;display:grid;gap:8px;font-size:14px">
-          <p style="margin:0">The normal download has the rims and the steering wheel; the lights crashed RoR on spawn, so they're left out. This zip holds versions that add parts of the lights back. Spawn each (restart RoR after a crash) and note which ones work.</p>
+          <p style="margin:0">The normal download has the rims, steering wheel, needles and pedals; the lights crashed RoR on spawn, so they're left out. This zip holds versions that add parts of the lights back. Spawn each (restart RoR after a crash) and note which ones work.</p>
           <ul class="notes">${MODEL_TESTS.map((t) => `<li><b>[j2r ${esc(J2R.version)} ${t.tag}]</b>: ${esc(t.label)}</li>`).join('')}</ul>
           <div class="row"><button type="button" id="modelPackBtn">Download crash test pack</button><span class="status" id="modelPackStatus"></span></div>
         </div>

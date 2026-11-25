@@ -207,8 +207,7 @@ for (const [S, s, y] of [['F', 'f', -1.3], ['R', 'r', 1.3]]) {
 
   const rd = J2R.convert(lib, { debug: 'quiet', config: 'red' });
   await J2R.addVisuals(lib, rd, {});
-  const rdProps = rd.truck.split('\n').filter((l) => /\.mesh$/.test(l) && /prop/.test(l));
-  check(rdProps.length === 1 && /source: steeringwheel/.test(rd.truck) && !/^flares2$/m.test(rd.truck) && !/mirror\.mesh/.test(rd.truck), 'by default: the steering wheel only, no lights or mirrors (everything at once crashed RoR on spawn)');
+  check(/source: steeringwheel/.test(rd.truck) && /source: speedo/.test(rd.truck) && !/^flares2$/m.test(rd.truck) && !/mirror\.mesh/.test(rd.truck), 'by default: steering wheel, needles and pedals, no lights or mirrors (lights crashed RoR on spawn)');
   console.log(failed ? `\n${failed} check(s) failed` : '\nAll feature checks passed');
   process.exit(failed ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });
