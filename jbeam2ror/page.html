@@ -345,7 +345,7 @@ footer p { margin: 0 0 6px; }
       <div class="row"><button type="button" class="primary" id="saveBtn">Download ${esc(r.fileBase)}.zip</button><span class="status" id="saveStatus"></span></div>
       <details><summary>Troubleshooting: download a test pack</summary>
         <div style="padding:0 12px 12px;display:grid;gap:8px;font-size:14px">
-          <p style="margin:0">If the car is unstable or shakes in RoR, this zip contains the normal build plus test builds that each change one thing. They show up separately in RoR's vehicle list, named <code>[j2r ${esc(J2R.version)} test A]</code> and so on. Spawn each, drive it, and note which ones stay calm (no shaking or falling apart).</p>
+          <p style="margin:0">If the car is unstable, shakes, or tops out too early in RoR, this zip contains the normal build plus test builds that each change one thing. They show up separately in RoR's vehicle list, named <code>[j2r ${esc(J2R.version)} test A]</code> and so on. Spawn each, drive it flat out through the gears, and note its top speed and whether it shakes or its wheels break.</p>
           <ul class="notes">${J2R.pack.map((k) => `<li><b>Test ${k}</b>: ${esc(J2R.experiments[k])}</li>`).join('')}</ul>
           <div class="row"><button type="button" id="packBtn">Download test pack</button><span class="status" id="packStatus"></span></div>
         </div>

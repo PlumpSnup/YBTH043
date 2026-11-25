@@ -20,7 +20,7 @@
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v30';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v31';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -40,9 +40,11 @@
     M: 'Lighter wheels: tyre nodes 1.6 kg instead of 2.2 kg',
     N: 'All of K, L and M together',
     O: 'Even lighter wheels: tyre nodes 1.3 kg',
+    P: 'Light wheels like BeamNG: tyre nodes 1.1 kg (less rolling drag, may shake)',
+    Q: 'Very light wheels: tyre nodes 0.8 kg (least rolling drag, may shake)',
   };
   // The builds offered in the test pack right now (the wheel tests A-E are settled)
-  const PACK = ['M', 'O'];
+  const PACK = ['M', 'P', 'Q'];
 
   // BeamNG defaults (used when a JBeam file does not set a value).
   const BNG = {
@@ -1259,7 +1261,9 @@
       // tyre contact is harsher than any model we could check against), while 2.2 kg holds.
       // Make the wheel at least that heavy; the extra is taken off the body below so the
       // car keeps BeamNG's total weight.
-      const minTread = (X === 'O' ? 1.3 : X === 'M' || X === 'N' || opts.lightWheels ? 1.6 : 2.2) * 2 * rays;
+      const treadKg = X === 'Q' ? 0.8 : X === 'P' ? 1.1 : X === 'O' ? 1.3 : X === 'M' || X === 'N' || opts.lightWheels ? 1.6 : 2.2;
+      const minTread = treadKg * 2 * rays;
+      if (X === 'P' || X === 'Q') mass = minTread; // exactly this light, even if BeamNG's wheel is heavier
       if (mass < minTread) { addedWheelMass += minTread - mass; mass = minTread; }
       const nodeMass = mass / (2 * rays);
       const psi = num(p.pressurePSI, 30);
@@ -1974,6 +1978,15 @@
     const energy = new Float64Array(n);
     // jiggle every node by up to 1 cm/s, like the rounding noise in RoR, so unstable modes show up
     for (let q = 0; q < n * 3; q++) vel[q] = rnd() * 0.02;
+    if (extra.initSpeed && extra.fwd) {
+      // start rolling: body at speed, each wheel spinning so its contact point is at rest
+      const fw = v3.norm(extra.fwd), spin = v3.cross(up, fw);
+      for (let i = 0; i < n; i++) { vel[i * 3] += fw[0] * extra.initSpeed; vel[i * 3 + 1] += fw[1] * extra.initSpeed; vel[i * 3 + 2] += fw[2] * extra.initSpeed; }
+      for (const wr of wheelRings) {
+        const c = [0, 1, 2].map((q) => (pos[wr.a * 3 + q] + pos[wr.b * 3 + q]) / 2), om = v3.scale(spin, extra.initSpeed / wr.w.radius);
+        for (let k2 = 0; k2 < wr.count; k2++) { const i = wr.base + k2; const r = [pos[i * 3] - c[0], pos[i * 3 + 1] - c[1], pos[i * 3 + 2] - c[2]]; const add = v3.cross(om, r); vel[i * 3] += add[0]; vel[i * 3 + 1] += add[1]; vel[i * 3 + 2] += add[2]; }
+      }
+    }
     for (let s = 0; s < steps; s++) {
       if (extra.steer !== undefined && s * dt > 1) {
         // RoR: steering right (cstate > 0) sets L = L0 * (1 - cstate * factor); ramp over 0.5 s
