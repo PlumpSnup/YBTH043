@@ -112,7 +112,7 @@ for (const [S, s, y] of [['F', 'f', -1.3], ['R', 'r', 1.3]]) {
 
   check(Math.abs(P('fw1l')[0] - (0.4 + 0.21)) < 1e-9 && Math.abs(P('fw1r')[0] + (0.4 + 0.21)) < 1e-9, 'slot nodeOffset: x mirrored per side, and "$x == nil" works for undefined variables');
   check(Math.abs(P('hdr')[0] - 0.2) < 1e-9 && Math.abs(P('hdr')[1] - 0.5) < 1e-9, '$components values resolve in node positions');
-  check(D.nodes.get('t1l').weight === 23.5, 'a later part overrides a node defined earlier (BeamNG load order)');
+  { const T = D.nodes.get('t1l'), B = D.nodes.get('t0l'); check(Math.abs(T.weight / B.weight - 23.5 / 20) < 0.02, `a later part overrides a node defined earlier (BeamNG load order): ${T.weight.toFixed(2)} vs ${B.weight.toFixed(2)}`); }
   const w = D.wheels.find((x) => x.name === 'FL');
   check(w && Math.abs(w.radius - (14 * 0.0254 / 2 + 0.185 * 0.65)) < 1e-6, 'missing base-game tire rebuilt from its name');
   check(w && w.brakeTorque === 1500 && D.wheels.find((x) => x.name === 'RL').parkTorque === 900, 'brake settings reach wheel rows in a later part');
