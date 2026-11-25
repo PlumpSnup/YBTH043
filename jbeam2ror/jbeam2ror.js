@@ -20,7 +20,7 @@
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v27';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v28';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -39,9 +39,10 @@
     L: 'Rear-wheel drive only (front axle not driven)',
     M: 'Lighter wheels: tyre nodes 1.6 kg instead of 2.2 kg',
     N: 'All of K, L and M together',
+    O: 'Even lighter wheels: tyre nodes 1.3 kg',
   };
   // The builds offered in the test pack right now (the wheel tests A-E are settled)
-  const PACK = ['K', 'L', 'M', 'N'];
+  const PACK = ['M', 'O'];
 
   // BeamNG defaults (used when a JBeam file does not set a value).
   const BNG = {
@@ -1182,9 +1183,21 @@
     const engineDev = [...devices.values()].find((d) => /combustionEngine|electricMotor/i.test(d.type));
     // A wheel is driven only if the chain of powertrain devices from its spindle/axle
     // leads back to the engine (every wheel has a spindle, driven or not).
+    // Drive modes (e.g. a 4x4 transfer case that starts in 2hi): devices the default mode
+    // disconnects don't pass power, like BeamNG at spawn.
+    const disconnected = new Set();
+    for (const { entry } of order) for (const sec of Object.values(entry.part)) {
+      if (!isDict(sec) || typeof sec.defaultMode !== 'string' || !isDict(sec.modes) || !isDict(sec.modes[sec.defaultMode])) continue;
+      const m = sec.modes[sec.defaultMode];
+      for (const t of Object.values(m)) if (Array.isArray(t)) for (const row of t) {
+        if (Array.isArray(row) && row[0] === 'powertrainDeviceMode' && isDict(row[1]) && /disconnect/i.test(String(row[1].mode)) && row[1].deviceName) disconnected.add(String(row[1].deviceName));
+      }
+    }
+    if (disconnected.size) warn(`Drive mode at start: ${[...disconnected].join(', ')} disconnected (as BeamNG's default mode, e.g. 2WD on a 4x4)`);
     const reachesEngine = (name) => {
       let dn = name, guard = 0;
       while (dn && devices.has(dn) && guard++ < 40) {
+        if (disconnected.has(dn)) return false;
         if (devices.get(dn) === engineDev) return true;
         dn = devices.get(dn).input;
       }
@@ -1237,7 +1250,7 @@
       // tyre contact is harsher than any model we could check against), while 2.2 kg holds.
       // Make the wheel at least that heavy; the extra is taken off the body below so the
       // car keeps BeamNG's total weight.
-      const minTread = (X === 'M' || X === 'N' ? 1.6 : 2.2) * 2 * rays;
+      const minTread = (X === 'O' ? 1.3 : X === 'M' || X === 'N' || opts.lightWheels ? 1.6 : 2.2) * 2 * rays;
       if (mass < minTread) { addedWheelMass += minTread - mass; mass = minTread; }
       const nodeMass = mass / (2 * rays);
       const psi = num(p.pressurePSI, 30);

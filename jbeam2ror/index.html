@@ -168,6 +168,7 @@ footer p { margin: 0 0 6px; }
           <div class="row">
             <button type="button" class="primary" id="convertBtn" disabled>Convert</button>
             <label style="font-size:14px;display:flex;gap:6px;align-items:center" for="withModel"><input type="checkbox" id="withModel" checked> Include the 3D model (body, interior, textures)</label>
+            <label style="font-size:14px;display:flex;gap:6px;align-items:center" for="lightWheels"><input type="checkbox" id="lightWheels"> Lighter wheels (less shaking at speed; try it if a car shakes)</label>
             <label style="font-size:14px;display:flex;gap:6px;align-items:center" for="showBeams"><input type="checkbox" id="showBeams"> Show the beam skeleton in RoR</label>
           </div>
           <div class="status" id="status" role="status" aria-live="polite"></div>
@@ -307,7 +308,7 @@ footer p { margin: 0 0 6px; }
     $('convertBtn').disabled = true;
     setTimeout(async () => {
       try {
-        const r = J2R.convert(state.lib, { model: $('vehSel').value, config: $('cfgSel').value || null, visibleBeams: $('showBeams').checked });
+        const r = J2R.convert(state.lib, { model: $('vehSel').value, config: $('cfgSel').value || null, visibleBeams: $('showBeams').checked, lightWheels: $('lightWheels').checked });
         if ($('withModel').checked && !state.isExample) await J2R.addVisuals(state.lib, r, {}, (m) => setStatus(m));
         state.result = r;
         renderReport();
@@ -405,7 +406,7 @@ footer p { margin: 0 0 6px; }
       msg.textContent = `Building ${i + 1} of ${keys.length}…`;
       await new Promise((res) => setTimeout(res, 20));
       try {
-        const r = J2R.convert(state.lib, { model: $('vehSel').value, config: $('cfgSel').value || null, visibleBeams: $('showBeams').checked, experiment: keys[i] });
+        const r = J2R.convert(state.lib, { model: $('vehSel').value, config: $('cfgSel').value || null, visibleBeams: $('showBeams').checked, lightWheels: $('lightWheels').checked, experiment: keys[i] });
         if ($('withModel').checked && !state.isExample) await J2R.addVisuals(state.lib, r, {}, (m) => { msg.textContent = `Building ${i + 1} of ${keys.length}: ${m}`; });
         for (const f of r.files) if (!files.some((x) => x.path === f.path)) files.push(f);
       } catch (err) { msg.textContent = `Couldn't build: ${err.message}`; return; }
