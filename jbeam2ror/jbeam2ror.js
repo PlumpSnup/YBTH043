@@ -20,7 +20,7 @@
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v40';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v41';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -3363,22 +3363,30 @@
       // colour texture's alpha, so translucent materials with an opacity map get a fixed alpha.
       if (translucent && (s0.opacityMap || glassy) && alpha >= 1) alpha = 0.35;
       const L2 = [`material ${name}`, '{', '\treceive_shadows on', '\ttechnique', '\t{', '\t\tpass', '\t\t{'];
-      if (/^invis/i.test(bngName) || /^invis/i.test((plan.materialAlias || {})[bngName] || '')) { // BeamNG's invisible helper material (e.g. dashboard lamps when off)
+      if (/^invis|_invisible$/i.test(bngName) || /^invis|_invisible$/i.test((plan.materialAlias || {})[bngName] || '')) { // BeamNG's invisible helper material (e.g. dashboard lamps when off)
         ogreMats.set(bngName, { name, text: [`material ${name}`, '{', '\ttechnique', '\t{', '\t\tpass', '\t\t{', '\t\t\tcolour_write off', '\t\t\tdepth_write off', '\t\t}', '\t}', '}', ''].join('\n') });
         return name;
       }
       // Lamp lenses: BeamNG tints them in its textures and glow maps (often white until lit), so
       // give them their colour: red for brake/tail lamps, amber for indicators, clear otherwise
       const lts = lightTypes(bngName);
+      let lensCover = false;
       if (lts.length) {
         const red = lts.includes('b') || (lts.includes('t') && /tail|rear|brake|stop/i.test(bngName));
         const amber = !red && (lts.includes('l') || lts.includes('r'));
         const tint = red ? [1, 0.13, 0.08] : amber ? [1, 0.55, 0.06] : null;
         if (tint) color = color.map((c2, i) => Math.max(0.12, c2) * tint[i] * (tex ? 1 : 1.6));
+        // the glass cover over a lamp: BeamNG's glass textures carry their own (very low)
+        // opacity, which made the covers vanish in RoR. Plain, nearly clear, shiny glass instead.
+        if (glassy && translucent) {
+          lensCover = true;
+          color = tint ? tint.map((x) => x * 0.9) : [0.85, 0.87, 0.9];
+          alpha = tint ? 0.5 : 0.18;
+        }
       }
       L2.push(`\t\t\tambient ${c3(color)}`);
       L2.push(`\t\t\tdiffuse ${c3(color)} ${(+alpha).toFixed(3)}`);
-      L2.push('\t\t\tspecular 0.25 0.25 0.25 1 24');
+      L2.push(lensCover ? '\t\t\tspecular 1 1 1 1 90' : '\t\t\tspecular 0.25 0.25 0.25 1 24');
       const lt = lightType(bngName);
       // glowing lens: only with materialflarebindings (RoR switches the glow with the flare);
       // without them an emissive colour would glow all the time
@@ -3386,7 +3394,7 @@
       if (def && def.doubleSided) L2.push('\t\t\tcull_hardware none');
       if (translucent) { L2.push('\t\t\tscene_blend alpha_blend'); L2.push('\t\t\tdepth_write off'); }
       else if (def && (def.alphaTest || +def.alphaRef > 0)) L2.push(`\t\t\talpha_rejection greater_equal ${Math.max(1, Math.min(255, Math.round(+def.alphaRef || 128)))}`);
-      if (tex) {
+      if (tex && !lensCover) {
         L2.push('\t\t\ttexture_unit', '\t\t\t{', `\t\t\t\ttexture ${texName(tex, bake)}`, '\t\t\t\ttex_address_mode wrap', '\t\t\t\tfiltering anisotropic', '\t\t\t\tmax_anisotropy 4', '\t\t\t}');
       }
       L2.push('\t\t}', '\t}', '}', '');
