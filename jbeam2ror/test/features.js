@@ -225,6 +225,12 @@ for (const [S, s, y] of [['F', 'f', -1.3], ['R', 'r', 1.3]]) {
     check(zok, 'Zstandard decoder matches Node\'s zstd at several levels');
   }
 
+  {
+    // an old material NAMED "car" (mapTo "car_old") must not hide the one that maps TO "car"
+    const defs = J2R._loadMaterialDefs({ materialFiles: [['a.json', { car: { name: 'car', mapTo: 'car_old', Stages: [{ id: 1 }] }, car_main: { name: 'car_main', mapTo: 'car', Stages: [{ id: 2 }] } }]] });
+    check(defs.get('car').def.name === 'car_main' && defs.get('car_old').def.name === 'car', 'meshes find materials by mapTo before by name');
+  }
+
   console.log(failed ? `\n${failed} check(s) failed` : '\nAll feature checks passed');
   process.exit(failed ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });

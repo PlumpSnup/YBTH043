@@ -20,7 +20,7 @@
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v36';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v37';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -1815,6 +1815,14 @@
     for (const nd of nodes.values()) planNodes[idx.get(nd.id)] = { pos: nd.pos, groups: nd.groups, id: nd.id };
     // Light materials: BeamNG swaps them at runtime (glowMap); RoR shows the "off" look
     const materialAlias = {};
+    // skins: a part with "skinName" in slot S swaps material M for "M.S.<skinName>" if it exists;
+    // "globalSkin" G swaps every material M for "M.skin.G"
+    const skins = [];
+    for (const { entry } of order) {
+      const pt = entry.part;
+      if (typeof pt.skinName === 'string' && pt.skinName && typeof pt.slotType === 'string') skins.push(`.${pt.slotType}.${pt.skinName}`);
+      if (typeof pt.globalSkin === 'string' && pt.globalSkin) skins.push(`.skin.${pt.globalSkin}`);
+    }
     for (const { entry } of order) if (isDict(entry.part.glowMap)) for (const [k2, v2] of Object.entries(entry.part.glowMap)) if (isDict(v2) && typeof v2.off === 'string' && !(k2 in materialAlias)) materialAlias[k2] = v2.off;
     // RoR builds each wheel's tread nodes itself, numbered after the declared nodes and the
     // cinecam nodes (ActorSpawnerFlow: nodes, cinecam, wheels), two per ray, outer ring
@@ -1872,7 +1880,7 @@
       glow[k2] = { off: v2.off, on: v2.on, funcs: typeof sf === 'string' ? [sf] : isDict(sf) ? Object.keys(sf) : [] };
     }
     const steeringLock = Math.max(0, ...steering.map((h) => h.wheelLock || 0)) || 450;
-    const visualPlan = { model: veh.model, flexbodies, paint, materialAlias, props: propRows, glow, steeringLock, shiftUpRPM: engine ? engine.shiftUp : 6000, fwd, up, nodes: planNodes, bodyNodes, wheels: planWheels, num: String };
+    const visualPlan = { model: veh.model, flexbodies, paint, materialAlias, skins, props: propRows, glow, steeringLock, shiftUpRPM: engine ? engine.shiftUp : 6000, fwd, up, nodes: planNodes, bodyNodes, wheels: planWheels, num: String };
     return {
       _engine: opts.debug ? engine : undefined,
       _debug: opts.debug ? { nodes, beams, shocks, steeringHydros, steering, wheels, slidenodes, up } : undefined,
@@ -3099,11 +3107,15 @@
   /** BeamNG materials.json definitions by material name (mapTo / name / key). */
   function loadMaterialDefs(lib) {
     const defs = new Map();
-    for (const [p, data] of lib.materialFiles || []) {
-      for (const [key, m] of Object.entries(data)) {
-        if (!isDict(m) || (m.class && !/^material$/i.test(m.class))) continue;
-        const entry = { def: m, file: p };
-        for (const n of [m.mapTo, m.name, key]) if (typeof n === 'string' && !defs.has(n)) defs.set(n, entry);
+    // meshes name materials by 'mapTo'; a material's own name only counts when no material maps
+    // to it (a mod can keep an old material named "car" mapped to "car_old" beside the real one)
+    for (const pass of [0, 1]) {
+      for (const [p, data] of lib.materialFiles || []) {
+        for (const [key, m] of Object.entries(data)) {
+          if (!isDict(m) || (m.class && !/^material$/i.test(m.class))) continue;
+          const entry = { def: m, file: p };
+          for (const n of pass === 0 ? [m.mapTo] : [m.name, key]) if (typeof n === 'string' && !defs.has(n)) defs.set(n, entry);
+        }
       }
     }
     return defs;
@@ -3154,7 +3166,11 @@
       if (/\.cdae$/i.test(e.path)) {
         const bytes = await e.read();
         let names = [];
-        try { names = cdaeObjectNames(bytes); } catch (err) { note(`${e.path} is a compiled model in an older format that can't be read yet.`); continue; }
+        try { names = cdaeObjectNames(bytes); } catch (err) {
+          // only worth a note when there is no .dae of the same model next to it
+          if (!daeEntries.some((d) => d.path.toLowerCase() === e.path.toLowerCase().replace(/\.cdae$/, '.dae'))) note(`${e.path} is a compiled model in an older format that can't be read yet.`);
+          continue;
+        }
         let hitC = false;
         for (const nm of names) if (wanted.has(nm) && !owner.has(nm)) { owner.set(nm, e); hitC = true; }
         if (hitC) daeTexts.set(e, bytes);
@@ -3223,7 +3239,10 @@
     function ogreMaterial(bngName) {
       if (ogreMats.has(bngName)) return ogreMats.get(bngName).name;
       const name = `j2r/${prefix}/${bngName}`;
-      const found = matDefs.get(bngName) || matDefs.get((plan.materialAlias || {})[bngName]);
+      const alias = (plan.materialAlias || {})[bngName];
+      let found = null;
+      for (const base of [bngName, alias]) for (const sk of base ? plan.skins || [] : []) if (!found) found = matDefs.get(base + sk) || null;
+      found = found || matDefs.get(bngName) || matDefs.get(alias);
       const def = found ? found.def : null;
       if (!def) missingMats.add(bngName);
       const stages = def && Array.isArray(def.Stages) ? def.Stages.filter(isDict) : [];
@@ -4138,7 +4157,7 @@
     }));
   }
 
-  const api = { zstdDecompress, parseCdae, cdaeGeometry, cdaeObjectNames, parseDDS, decodeDDS, encodeDDS, convertTexture, _bc7Block: bc7Block, addVisuals, parseCollada, colladaGeometry, writeOgreMesh, readOgreMesh, parseXML, makeZipCompressed, version: CONVERTER_VERSION, experiments: EXPERIMENTS, pack: PACK, _stabilizeModes: stabilizeModes, _simulateDrop: simulateDrop, parseJBeam, evalExpression, openZip, makeZip, loadLibrary, listVehicles, convert, buildModZip, filesToEntries, crc32 };
+  const api = { zstdDecompress, parseCdae, cdaeGeometry, cdaeObjectNames, parseDDS, decodeDDS, encodeDDS, convertTexture, _bc7Block: bc7Block, addVisuals, parseCollada, colladaGeometry, writeOgreMesh, readOgreMesh, parseXML, makeZipCompressed, version: CONVERTER_VERSION, experiments: EXPERIMENTS, pack: PACK, _stabilizeModes: stabilizeModes, _simulateDrop: simulateDrop, _loadMaterialDefs: loadMaterialDefs, parseJBeam, evalExpression, openZip, makeZip, loadLibrary, listVehicles, convert, buildModZip, filesToEntries, crc32 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.J2R = api;
 })(typeof self !== 'undefined' ? self : this);
