@@ -226,6 +226,41 @@ for (const [S, s, y] of [['F', 'f', -1.3], ['R', 'r', 1.3]]) {
   }
 
   {
+    // PNG: every row filter, RGB and palette images, against pixels we wrote ourselves
+    const zl = require('zlib');
+    const crcT = []; for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; crcT[n] = c >>> 0; }
+    const crc = (b) => { let c = 0xffffffff; for (const x of b) c = crcT[(c ^ x) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+    const chunk = (t, d) => { const b = Buffer.alloc(12 + d.length); b.writeUInt32BE(d.length, 0); b.write(t, 4, 'latin1'); Buffer.from(d).copy(b, 8); b.writeUInt32BE(crc(b.subarray(4, 8 + d.length)), 8 + d.length); return b; };
+    const makePNG = (w, h, ctype, ch, rows, extra) => {
+      const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = ctype;
+      const raw = [];
+      rows.forEach((row, y) => {
+        const f = y % 5, prev = y ? rows[y - 1] : new Uint8Array(row.length);
+        raw.push(f);
+        for (let i = 0; i < row.length; i++) {
+          const a = i >= ch ? row[i - ch] : 0, b = prev[i], c = i >= ch ? prev[i - ch] : 0;
+          const pa = Math.abs(b - c), pb = Math.abs(a - c), pc = Math.abs(a + b - 2 * c);
+          const pred = [0, a, b, (a + b) >> 1, pa <= pb && pa <= pc ? a : pb <= pc ? b : c][f];
+          raw.push((row[i] - pred) & 255);
+        }
+      });
+      return new Uint8Array(Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), ...(extra || []), chunk('IDAT', zl.deflateSync(Buffer.from(raw))), chunk('IEND', [])]));
+    };
+    const W = 7, H = 6;
+    const rows = [...Array(H)].map((_, y) => Uint8Array.from([...Array(W * 3)].map((_, i) => (i * 37 + y * 91 + (i * y) % 13) & 255)));
+    const img = await J2R.decodePNG(makePNG(W, H, 2, 3, rows));
+    let pngOk = img.w === W && img.h === H;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) for (let c = 0; c < 3; c++) if (img.rgba[(y * W + x) * 4 + c] !== rows[y][x * 3 + c]) pngOk = false;
+    const pal = await J2R.decodePNG(makePNG(2, 1, 3, 1, [Uint8Array.from([1, 0])], [chunk('PLTE', [10, 20, 30, 200, 100, 50])]));
+    check(pngOk && Array.from(pal.rgba).join() === '200,100,50,255,10,20,30,255', 'PNG decoder: all five row filters and palette images');
+    const one = (v) => ({ w: 1, h: 1, rgba: Uint8Array.from([v, v, v, 255]) });
+    const chrome = J2R._shineMask({ metal: one(255), rough: one(0) }, { metal: 1, rough: 1 }, 64).rgba[0];
+    const rubber = J2R._shineMask({ metal: one(0), rough: one(255) }, { metal: 1, rough: 1 }, 64).rgba[0];
+    const paintOnly = J2R._shineMask({ paint: one(255) }, { metal: 0, rough: 0.5 }, 64).rgba[0];
+    check(chrome > 200 && rubber === 0 && paintOnly > 20 && paintOnly < 70, `shine mask: chrome ${chrome}, rubber ${rubber}, paint ${paintOnly}`);
+  }
+
+  {
     // an old material NAMED "car" (mapTo "car_old") must not hide the one that maps TO "car"
     const defs = J2R._loadMaterialDefs({ materialFiles: [['a.json', { car: { name: 'car', mapTo: 'car_old', Stages: [{ id: 1 }] }, car_main: { name: 'car_main', mapTo: 'car', Stages: [{ id: 2 }] } }]] });
     check(defs.get('car').def.name === 'car_main' && defs.get('car_old').def.name === 'car', 'meshes find materials by mapTo before by name');

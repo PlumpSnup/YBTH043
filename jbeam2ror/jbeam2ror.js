@@ -20,7 +20,7 @@
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v41';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v42';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -326,6 +326,68 @@
     // Node without DecompressionStream
     const zlib = require('zlib');
     return new Uint8Array(zlib.inflateRawSync(bytes));
+  }
+
+  /** zlib-wrapped deflate (PNG image data). */
+  async function inflateZlib(bytes) {
+    if (typeof DecompressionStream !== 'undefined') {
+      const ds = new DecompressionStream('deflate');
+      const stream = new Blob([bytes]).stream().pipeThrough(ds);
+      return new Uint8Array(await new Response(stream).arrayBuffer());
+    }
+    const zlib = require('zlib');
+    return new Uint8Array(zlib.inflateSync(bytes));
+  }
+
+  /** Decode a PNG (8/16-bit grey, RGB, palette, grey+alpha, RGBA; not interlaced) to {w, h, rgba}. */
+  async function decodePNG(bytes) {
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (dv.getUint32(0) !== 0x89504e47) throw new Error('not a PNG');
+    let p = 8, w = 0, h = 0, depth = 8, ctype = 6, interlace = 0, plte = null, trns = null;
+    const idat = [];
+    while (p + 8 <= bytes.length) {
+      const len = dv.getUint32(p), type = String.fromCharCode(...bytes.subarray(p + 4, p + 8));
+      const data = bytes.subarray(p + 8, p + 8 + len);
+      if (type === 'IHDR') { w = dv.getUint32(p + 8); h = dv.getUint32(p + 12); depth = data[8]; ctype = data[9]; interlace = data[12]; }
+      else if (type === 'PLTE') plte = data;
+      else if (type === 'tRNS') trns = data;
+      else if (type === 'IDAT') idat.push(data);
+      else if (type === 'IEND') break;
+      p += 12 + len;
+    }
+    if (interlace) throw new Error('interlaced PNG');
+    if (depth !== 8 && depth !== 16 && !(ctype === 3 && depth <= 8) && !(ctype === 0 && depth < 8)) throw new Error(`PNG bit depth ${depth}`);
+    const all = new Uint8Array(idat.reduce((n, d) => n + d.length, 0));
+    let o = 0;
+    for (const d of idat) { all.set(d, o); o += d.length; }
+    const raw = await inflateZlib(all);
+    const ch = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 }[ctype];
+    if (!ch) throw new Error(`PNG colour type ${ctype}`);
+    const bpp = Math.max(1, (ch * depth) >> 3), stride = (w * ch * depth + 7) >> 3;
+    const cur = new Uint8Array(stride), prev = new Uint8Array(stride);
+    const rgba = new Uint8Array(w * h * 4);
+    let rp = 0;
+    for (let y = 0; y < h; y++) {
+      const f = raw[rp++];
+      for (let i = 0; i < stride; i++) {
+        const x = raw[rp++], a = i >= bpp ? cur[i - bpp] : 0, b = prev[i], c = i >= bpp ? prev[i - bpp] : 0;
+        let v;
+        if (f === 0) v = x; else if (f === 1) v = x + a; else if (f === 2) v = x + b; else if (f === 3) v = x + ((a + b) >> 1);
+        else { const pa = Math.abs(b - c), pb = Math.abs(a - c), pc = Math.abs(a + b - 2 * c); v = x + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c); }
+        cur[i] = v & 255;
+      }
+      const sample = (k) => (depth === 16 ? cur[k * 2] : depth === 8 ? cur[k] : ((cur[(k * depth) >> 3] >> (8 - depth - ((k * depth) & 7))) & ((1 << depth) - 1)));
+      for (let x = 0; x < w; x++) {
+        const q = (y * w + x) * 4;
+        if (ctype === 3) { const i = sample(x); rgba[q] = plte[i * 3]; rgba[q + 1] = plte[i * 3 + 1]; rgba[q + 2] = plte[i * 3 + 2]; rgba[q + 3] = trns && i < trns.length ? trns[i] : 255; }
+        else if (ctype === 0) { const v = depth < 8 ? Math.round(sample(x) * 255 / ((1 << depth) - 1)) : sample(x); rgba[q] = rgba[q + 1] = rgba[q + 2] = v; rgba[q + 3] = 255; }
+        else if (ctype === 4) { rgba[q] = rgba[q + 1] = rgba[q + 2] = sample(x * 2); rgba[q + 3] = sample(x * 2 + 1); }
+        else if (ctype === 2) { rgba[q] = sample(x * 3); rgba[q + 1] = sample(x * 3 + 1); rgba[q + 2] = sample(x * 3 + 2); rgba[q + 3] = 255; }
+        else { rgba[q] = sample(x * 4); rgba[q + 1] = sample(x * 4 + 1); rgba[q + 2] = sample(x * 4 + 2); rgba[q + 3] = sample(x * 4 + 3); }
+      }
+      prev.set(cur);
+    }
+    return { w, h, rgba };
   }
 
   /** Read a zip's central directory from a Blob. Returns [{path, read(): Promise<Uint8Array>}]. */
@@ -3284,11 +3346,22 @@
       const key = entry.path + (bake ? '|' + bake.mask.path + '|' + bake.paint.join(',') : '');
       if (textures.has(key)) return textures.get(key).name;
       const file = entry.path.split('/').pop();
-      let n = bake ? file.replace(/(\.[^.]+)$/, '_painted$1') : file;
+      let n = bake ? file.replace(/\.[^.]+$/, '') + '_painted.dds' : file;
       let k = 2;
       while (usedTexNames.has(n.toLowerCase())) n = `${k++}_${n}`;
       usedTexNames.add(n.toLowerCase());
       textures.set(key, { entry, name: n, bake });
+      return n;
+    }
+    let shinyMats = 0;
+    function shineName(bngName, maps, fac) {
+      const key = `shine|${['metal', 'rough', 'spec', 'paint'].map((k) => (maps[k] ? maps[k].path : '')).join('|')}|${fac.metal}|${fac.rough}`;
+      if (textures.has(key)) return textures.get(key).name;
+      let n = `${String(bngName).replace(/[^A-Za-z0-9_.-]+/g, '_')}_shine.dds`;
+      let k = 2;
+      while (usedTexNames.has(n.toLowerCase())) n = `${k++}_${n}`;
+      usedTexNames.add(n.toLowerCase());
+      textures.set(key, { name: n, shine: { maps, fac } });
       return n;
     }
     const c3 = (a) => a.map((x) => (+x).toFixed(3)).join(' ');
@@ -3347,10 +3420,12 @@
       // stage's opacityMap). With the mask we bake the paint into the texture so trim and
       // chrome keep their colour; without it the whole material is tinted.
       let bake = null;
-      if (painted && tex && /\.dds$/i.test(tex.path)) {
+      let paintMask = null;
+      if (painted) {
         const ps = stages.find((st) => st.instanceDiffuse === true);
-        const maskEntry = ps && ps.opacityMap && !(+ps.opacityMapUV > 0) ? findTexture(lib, ps.opacityMap, found && found.file) : null;
-        if (maskEntry && /\.dds$/i.test(maskEntry.path)) bake = { mask: maskEntry, paint };
+        paintMask = ps && ps.opacityMap && !(+ps.opacityMapUV > 0) ? findTexture(lib, ps.opacityMap, found && found.file) : null;
+        if (paintMask && !/\.(dds|png)$/i.test(paintMask.path)) paintMask = null;
+        if (paintMask && tex && /\.(dds|png)$/i.test(tex.path)) bake = { mask: paintMask, paint };
       }
       if (painted && !bake) color = color.map((c, q) => c * paint[q]);
       let alpha = 1;
@@ -3397,7 +3472,34 @@
       if (tex && !lensCover) {
         L2.push('\t\t\ttexture_unit', '\t\t\t{', `\t\t\t\ttexture ${texName(tex, bake)}`, '\t\t\t\ttex_address_mode wrap', '\t\t\t\tfiltering anisotropic', '\t\t\t\tmax_anisotropy 4', '\t\t\t}');
       }
-      L2.push('\t\t}', '\t}', '}', '');
+      L2.push('\t\t}');
+      // Shine: a second pass adds RoR's environment reflection (the 'EnvironmentTexture' cube
+      // map RoR's own shiny vehicle materials use), strong on chrome, light on paint, scaled
+      // per pixel by a mask from BeamNG's metallic / roughness maps where the mod has them.
+      if (opts.shine !== false && !translucent && !lensCover && !lts.length && !/tyre|tire|rubber|glass|window|interior|seat|carpet|decal|gauge|screen/i.test(bngName)) {
+        const mapOf = (r) => { if (typeof r !== 'string' || !r || /null\.dds$/i.test(r)) return null; const e = findTexture(lib, r, found && found.file); return e && /\.(dds|png)$/i.test(e.path) ? e : null; };
+        const chromeName = /chrome|chrom|polish|bright_?metal/i.test(bngName);
+        const maps = { metal: mapOf(s0.metallicMap), rough: mapOf(s0.roughnessMap), spec: s0.pixelSpecular || s0.specularMap ? mapOf(s0.specularMap) : null, paint: paintMask };
+        const fac = { metal: num(s0.metallicFactor, maps.metal ? 1 : 0), rough: num(s0.roughnessFactor, maps.rough ? 1 : 0.5) };
+        let unit = null, specLine = null;
+        if (!chromeName && (maps.metal || maps.rough || maps.spec || maps.paint)) {
+          unit = ['\t\t\ttexture_unit', '\t\t\t{', `\t\t\t\ttexture ${shineName(bngName, maps, fac)}`, '\t\t\t\ttex_address_mode wrap', '\t\t\t\tcolour_op replace', '\t\t\t}',
+            '\t\t\ttexture_unit', '\t\t\t{', '\t\t\t\tcubic_texture EnvironmentTexture combinedUVW', '\t\t\t\tenv_map cubic_reflection', '\t\t\t\ttex_address_mode clamp', '\t\t\t\tcolour_op_ex modulate src_texture src_current', '\t\t\t}'];
+          specLine = painted ? '\t\t\tspecular 0.7 0.7 0.7 1 64' : null;
+        } else {
+          const k = chromeName ? 0.7 : fac.metal >= 0.9 && fac.rough <= 0.25 ? 0.6 : painted ? 0.2 : 0;
+          if (k > 0) {
+            unit = ['\t\t\ttexture_unit', '\t\t\t{', '\t\t\t\tcubic_texture EnvironmentTexture combinedUVW', '\t\t\t\tenv_map cubic_reflection', '\t\t\t\ttex_address_mode clamp', `\t\t\t\tcolour_op_ex modulate src_texture src_manual ${k} ${k} ${k}`, '\t\t\t}'];
+            specLine = k >= 0.5 ? '\t\t\tspecular 1 1 1 1 100' : '\t\t\tspecular 0.7 0.7 0.7 1 64';
+          }
+        }
+        if (unit) {
+          if (specLine) { const si = L2.findIndex((l) => /^\t\t\tspecular /.test(l)); if (si >= 0) L2[si] = specLine; }
+          L2.push('\t\tpass', '\t\t{', '\t\t\tlighting off', '\t\t\tscene_blend add', '\t\t\tdepth_write off', '\t\t\tdepth_func less_equal', ...(def && def.doubleSided ? ['\t\t\tcull_hardware none'] : []), ...unit, '\t\t}');
+          shinyMats++;
+        }
+      }
+      L2.push('\t}', '}', '');
       ogreMats.set(bngName, { name, text: L2.join('\n') });
       return name;
     }
@@ -3948,9 +4050,31 @@
     for (const m of meshFiles) result.files.push(m);
     // BeamNG's BC7 textures show black on RoR's Direct3D 9 renderer: re-encode them as DXT
     let texBytes = 0, converted = 0, k2 = 0;
-    for (const { entry, name, bake } of textures.values()) {
-      log(`Converting texture ${++k2} of ${textures.size}: ${entry.path.split('/').pop()}…`);
+    const readImage = async (e) => { const b = await e.read(); return /\.png$/i.test(e.path) ? decodePNG(b) : decodeDDSFit(parseDDS(b), 1024); };
+    for (const { entry, name, bake, shine } of textures.values()) {
+      log(`Converting texture ${++k2} of ${textures.size}: ${shine ? name : entry.path.split('/').pop()}…`);
       await new Promise((res) => setTimeout(res, 0));
+      if (shine) {
+        try {
+          const ckey = `shine|${name}|${['metal', 'rough', 'spec', 'paint'].map((k) => (shine.maps[k] ? shine.maps[k].path : '')).join('|')}|${shine.fac.metal}|${shine.fac.rough}`;
+          lib._texCache = lib._texCache || new Map();
+          let out = lib._texCache.get(ckey);
+          if (!out) {
+            const imgs = {};
+            for (const k of ['metal', 'rough', 'spec', 'paint']) imgs[k] = shine.maps[k] ? await readImage(shine.maps[k]) : null;
+            out = encodeDDS(shineMask(imgs, shine.fac, 1024));
+            lib._texCache.set(ckey, out);
+          }
+          texBytes += out.length;
+          result.files.push({ path: name, data: out, binary: true });
+        } catch (err) {
+          // no mask: a plain black one (no reflection) so the material still loads
+          note(`Shine mask ${name} could not be made (${err.message}).`);
+          const out = encodeDDS({ w: 4, h: 4, rgba: new Uint8Array(64).map((_, i) => (i % 4 === 3 ? 255 : 0)) });
+          result.files.push({ path: name, data: out, binary: true });
+        }
+        continue;
+      }
       let data;
       try { data = await entry.read(); } catch (err) { note(`Texture ${entry.path} could not be read: ${err.message}`); continue; }
       try {
@@ -3958,8 +4082,10 @@
         lib._texCache = lib._texCache || new Map();
         let out = lib._texCache.get(ckey);
         if (!out) {
-          const b2 = bake ? { mask: await bake.mask.read(), paint: bake.paint } : null;
-          out = convertTexture(data, entry.path, b2, opts.maxTextureSize || 2048);
+          const b2 = bake ? { mask: /\.png$/i.test(bake.mask.path) ? await decodePNG(await bake.mask.read()) : await bake.mask.read(), paint: bake.paint } : null;
+          // a PNG to bake paint into is decoded first; other PNGs are copied as they are
+          const src = bake && /\.png$/i.test(entry.path) ? await decodePNG(data) : data;
+          out = convertTexture(src, entry.path, b2, opts.maxTextureSize || 2048);
           lib._texCache.set(ckey, out);
         }
         if (!out.kept) converted++;
@@ -3968,6 +4094,7 @@
       texBytes += data.length;
       result.files.push({ path: name, data, binary: true });
     }
+    if (shinyMats) note(`${shinyMats} material(s) got reflections (chrome, metal, paint); they show RoR's environment when reflections are on in its graphics settings.`);
     if (converted) note(`${converted} texture(s) were re-encoded to DXT so RoR's Direct3D 9 / OpenGL renderers can show them.`);
     const stats = { flexbodies: lines.length / 3, vertices: totalVerts, triangles: Math.round(totalTris), materials: ogreMats.size, textures: textures.size, textureMB: +(texBytes / 1048576).toFixed(1) };
     result.report.stats.model = `${stats.flexbodies} parts, ${stats.triangles} triangles, ${stats.materials} materials, ${stats.textures} textures (${stats.textureMB} MB)`;
@@ -4228,15 +4355,18 @@
    */
   function convertTexture(bytes, path, bake, maxSize) {
     maxSize = maxSize || 2048;
-    if (!/\.dds$/i.test(path) && !bake) return { data: bytes, kept: true };
+    const decoded = (x) => x && x.rgba instanceof Uint8Array; // an already decoded {w, h, rgba} (e.g. a PNG)
+    const fit = (im) => { let r = { w: im.w, h: im.h, rgba: im.rgba.slice() }; while (Math.max(r.w, r.h) > maxSize) r = halve(r); return r; };
+    if (!decoded(bytes) && !/\.dds$/i.test(path) && !bake) return { data: bytes, kept: true };
     let img;
-    if (/\.dds$/i.test(path)) {
+    if (decoded(bytes)) img = fit(bytes);
+    else if (/\.dds$/i.test(path)) {
       const dds = parseDDS(bytes);
       if (!bake && dds.legacy && /^BC[123]$/.test(dds.format) && Math.max(dds.width, dds.height) <= 4096) return { data: bytes, kept: true };
       img = decodeDDSFit(dds, maxSize);
     } else throw new Error('paint baking needs a DDS texture');
     if (bake) {
-      const m = decodeDDSFit(parseDDS(bake.mask), Math.max(img.w, img.h));
+      const m = decoded(bake.mask) ? bake.mask : decodeDDSFit(parseDDS(bake.mask), Math.max(img.w, img.h));
       const p = bake.paint.map((v) => Math.max(0, Math.min(255, v * 255)));
       for (let y = 0; y < img.h; y++) for (let x = 0; x < img.w; x++) {
         const mx = Math.min(m.w - 1, Math.floor(x * m.w / img.w)), my = Math.min(m.h - 1, Math.floor(y * m.h / img.h));
@@ -4245,6 +4375,30 @@
       }
     }
     return { data: encodeDDS(img), kept: false, w: img.w, h: img.h };
+  }
+
+  /**
+   * Reflection mask for a material (grey: how much of the environment the surface reflects).
+   * maps: {metal, rough, spec, paint} decoded images or null; f: {metal, rough} factors.
+   * Chrome / polished metal (metallic and smooth) reflects strongly, paint like a clear coat.
+   */
+  function shineMask(maps, f, maxSize) {
+    const imgs = [maps.metal, maps.rough, maps.spec, maps.paint].filter(Boolean);
+    let w = Math.max(...imgs.map((m) => m.w)), h = Math.max(...imgs.map((m) => m.h));
+    while (Math.max(w, h) > maxSize) { w = Math.max(1, w >> 1); h = Math.max(1, h >> 1); }
+    const at = (m, x, y) => m.rgba[(Math.min(m.h - 1, Math.floor(y * m.h / h)) * m.w + Math.min(m.w - 1, Math.floor(x * m.w / w))) * 4] / 255;
+    const rgba = new Uint8Array(w * h * 4);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const metal = maps.metal ? at(maps.metal, x, y) * f.metal : f.metal;
+      const rough = maps.rough ? at(maps.rough, x, y) * f.rough : f.rough;
+      const smooth = Math.max(0, 1 - rough);
+      let v = metal * smooth * smooth * 0.85;
+      if (maps.spec) v = Math.max(v, at(maps.spec, x, y) * 0.45);
+      if (maps.paint) v = Math.max(v, at(maps.paint, x, y) * 0.22 * (0.5 + 0.5 * smooth));
+      const q = (y * w + x) * 4;
+      rgba[q] = rgba[q + 1] = rgba[q + 2] = Math.round(Math.min(1, v) * 255); rgba[q + 3] = 255;
+    }
+    return { w, h, rgba };
   }
 
   /** "1-5,7,9-12" from a list of numbers. */
@@ -4274,7 +4428,7 @@
     }));
   }
 
-  const api = { zstdDecompress, parseCdae, cdaeGeometry, cdaeObjectNames, parseDDS, decodeDDS, encodeDDS, convertTexture, _bc7Block: bc7Block, addVisuals, parseCollada, colladaGeometry, writeOgreMesh, readOgreMesh, parseXML, makeZipCompressed, version: CONVERTER_VERSION, experiments: EXPERIMENTS, pack: PACK, _stabilizeModes: stabilizeModes, _simulateDrop: simulateDrop, _loadMaterialDefs: loadMaterialDefs, parseJBeam, evalExpression, openZip, makeZip, loadLibrary, listVehicles, convert, buildModZip, filesToEntries, crc32 };
+  const api = { decodePNG, _shineMask: shineMask, zstdDecompress, parseCdae, cdaeGeometry, cdaeObjectNames, parseDDS, decodeDDS, encodeDDS, convertTexture, _bc7Block: bc7Block, addVisuals, parseCollada, colladaGeometry, writeOgreMesh, readOgreMesh, parseXML, makeZipCompressed, version: CONVERTER_VERSION, experiments: EXPERIMENTS, pack: PACK, _stabilizeModes: stabilizeModes, _simulateDrop: simulateDrop, _loadMaterialDefs: loadMaterialDefs, parseJBeam, evalExpression, openZip, makeZip, loadLibrary, listVehicles, convert, buildModZip, filesToEntries, crc32 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.J2R = api;
 })(typeof self !== 'undefined' ? self : this);
