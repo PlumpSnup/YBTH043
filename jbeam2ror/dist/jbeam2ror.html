@@ -209,7 +209,7 @@ footer p { margin: 0 0 6px; }
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v42';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v43';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -3932,7 +3932,7 @@ footer p { margin: 0 0 6px; }
       const rims = rimOf.get(w) || null;
       const c = w.center, a = w.axis;
       const R = w.radius;
-      const h = Math.max(0.06, (w.tireWidth > 0.05 ? w.tireWidth : Math.hypot(...sub(P0(w.n2), P0(w.n1)))) / 2);
+      let h = Math.max(0.06, (w.tireWidth > 0.05 ? w.tireWidth : Math.hypot(...sub(P0(w.n2), P0(w.n1)))) / 2);
       let rimR = 0, t0 = 0;
       if (rims) {
         const radial = (q) => { const d = [q[0] - c[0], q[1] - c[1], q[2] - c[2]]; const t = dot(d, a); return [Math.hypot(d[0] - a[0] * t, d[1] - a[1] * t, d[2] - a[2] * t), t]; };
@@ -3943,6 +3943,9 @@ footer p { margin: 0 0 6px; }
         for (const arr of rims) for (let v = 0; v < arr.length; v += 3) { const [r0, t] = radial([arr[v], arr[v + 1], arr[v + 2]]); if (r0 > rimR * 0.9) ts.push(t); }
         ts.sort((x, y) => x - y);
         t0 = ts.length ? (ts[Math.floor(ts.length * 0.02)] + ts[Math.ceil(ts.length * 0.98) - 1]) / 2 : 0;
+        // a tyre wider than its rim bulged far past the rim edge: keep the sidewall within ~5 % of it
+        const span = ts.length ? ts[Math.ceil(ts.length * 0.98) - 1] - ts[Math.floor(ts.length * 0.02)] : 0;
+        if (span > 0.06) h = Math.min(h, span / 2 * 1.05);
         if (!(rimR > 0.05) || rimR > R * 0.97) continue;
       } else {
         // The rim model is a base-game part: build a plain steel rim to go with the tyre
