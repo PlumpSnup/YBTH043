@@ -209,7 +209,7 @@ footer p { margin: 0 0 6px; }
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v38';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v39';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -3483,24 +3483,33 @@ footer p { margin: 0 0 6px; }
     const c3 = (a) => a.map((x) => (+x).toFixed(3)).join(' ');
     // RoR flare type for a BeamNG glowMap material (exterior lamps only)
     const glow = plan.glow || {};
-    function lightType(key) {
+    // lens glow (materialflarebindings) crashed RoR 2026.01, so it's off unless asked for (opts.lights true / {lenses: true})
+    const lensGlow = opts.lights === true || (!!opts.lights && typeof opts.lights === 'object' && opts.lights.lenses !== false);
+    // A lamp can have several jobs (US tail lamps: brake + tail + turn signal), so a list.
+    function lightTypes(key) {
       const gl = glow[key];
-      if (!gl) return null;
-      // dashboard warning/indicator lamps switch a dashboard or gauge material, or BeamNG's invisible one
-      if (/^invis|lamp|gauge|dial|decal|cluster|dash/i.test(String(gl.off || '')) || /^invis|lamp|gauge|dial|decal|cluster|dash/i.test(String(gl.on || ''))) return null;
-      // function names vary: lights_lowbeam, lowbeam, signal_L_filament, lowhighbeam_filament_alt ...
+      if (!gl) return [];
+      // dashboard warning/indicator lamps switch a dashboard or gauge material, or BeamNG's invisible
+      // one; interiors switch to a backlit version at night. None of them are exterior lamps.
+      const dash = /^invis|lamp|gauge|dial|decal|cluster|dash/i;
+      const cabin = /interior|seat|carpet|screen|radio|display|door_?panel/i;
+      if ([gl.off, gl.on].some((x) => dash.test(String(x || '')) || cabin.test(String(x || ''))) || cabin.test(String(key))) return [];
+      // function names vary: lights_lowbeam, lowbeam, signal_L_filament, lowhighbeam_filament_alt, lowhighSignal_L ...
       const f = gl.funcs.map((x) => String(x).toLowerCase().replace(/^lights_/, '').replace(/_?(filament|alt|light)+$/g, '').replace(/_+$/, ''));
-      if (!f.length) return null;
-      if (f.some((x) => /signal_?l$|turn_?l$|blinker_?l$/.test(x))) return 'l';
-      if (f.some((x) => /signal_?r$|turn_?r$|blinker_?r$/.test(x))) return 'r';
-      if (f.some((x) => /brake/.test(x))) return 'b';
-      if (f.some((x) => /reverse/.test(x))) return 'R';
-      if (f.some((x) => /fog/.test(x))) return 'g';
-      if (f.some((x) => /^lowbeam$|^highbeam$/.test(x)) || (f.some((x) => /lowhighbeam|beam/.test(x)) && /head|beam/i.test(key))) return 'f';
-      if (f.some((x) => /lowhighbeam|running|parking|tail|position/.test(x))) return 't'; // front ones become white sidelights
-      return null;
+      const out = [];
+      if (f.some((x) => /signal_?l$|turn_?l$|blinker_?l$/.test(x))) out.push('l');
+      if (f.some((x) => /signal_?r$|turn_?r$|blinker_?r$/.test(x))) out.push('r');
+      if (f.some((x) => /brake/.test(x))) out.push('b');
+      if (f.some((x) => /reverse/.test(x))) out.push('R');
+      if (f.some((x) => /fog/.test(x))) out.push('g');
+      if (f.some((x) => /^lowbeam$|^highbeam$/.test(x)) || (f.some((x) => /lowhighbeam|beam/.test(x)) && /head|beam/i.test(key))) out.push('f');
+      // tail / running / parking (also "lowhighSignal": a lamp lit with the lights that blinks
+      // as a signal); a brake lamp that is also a tail lamp gets its tail flare with the brake one
+      if (!out.includes('b') && !out.includes('f') && f.some((x) => /lowhigh|running|parking|tail|position/.test(x))) out.push('t');
+      return out;
     }
-    const isTail = (key) => !!glow[key] && glow[key].funcs.some((x) => /lowhighbeam|running|tail/i.test(x));
+    const lightType = (key) => lightTypes(key)[0] || null;
+    const isTail = (key) => !!glow[key] && glow[key].funcs.some((x) => /lowhigh|running|tail|parking|position/i.test(x));
     const LIGHT_RGB = { f: [1, 1, 0.92], h: [1, 1, 0.92], g: [1, 1, 0.85], t: [0.9, 0.06, 0.03], b: [1, 0.06, 0.03], R: [1, 1, 1], l: [1, 0.55, 0.05], r: [1, 0.55, 0.05] };
     function ogreMaterial(bngName) {
       if (ogreMats.has(bngName)) return ogreMats.get(bngName).name;
@@ -3551,7 +3560,9 @@ footer p { margin: 0 0 6px; }
       L2.push(`\t\t\tdiffuse ${c3(color)} ${(+alpha).toFixed(3)}`);
       L2.push('\t\t\tspecular 0.25 0.25 0.25 1 24');
       const lt = lightType(bngName);
-      if (lt) { L2.push(`\t\t\temissive ${c3(LIGHT_RGB[lt])}`); lightMats.set(name, lt); } // RoR turns this on with the lamp's flare
+      // glowing lens: only with materialflarebindings (RoR switches the glow with the flare);
+      // without them an emissive colour would glow all the time
+      if (lt && lensGlow) { L2.push(`\t\t\temissive ${c3(LIGHT_RGB[lt])}`); lightMats.set(name, lt); }
       if (def && def.doubleSided) L2.push('\t\t\tcull_hardware none');
       if (translucent) { L2.push('\t\t\tscene_blend alpha_blend'); L2.push('\t\t\tdepth_write off'); }
       else if (def && (def.alphaTest || +def.alphaRef > 0)) L2.push(`\t\t\talpha_rejection greater_equal ${Math.max(1, Math.min(255, Math.round(+def.alphaRef || 128)))}`);
@@ -3734,10 +3745,12 @@ footer p { margin: 0 0 6px; }
         subsList = keep;
       }
       for (const s of subsList) {
-        const type = lightType(s.material);
-        if (!type) continue;
-        if (!lightTris.has(type)) lightTris.set(type, []);
-        for (let t = 0; t < s.idx.length; t += 3) { const ti = triInfo(s.idx, t); lightTris.get(type).push({ p: ti.p, n: ti.n, a: ti.area, tail: isTail(s.material), mat: s.material }); }
+        const types = lightTypes(s.material);
+        if (!types.length) continue;
+        const tail = isTail(s.material);
+        const infos = [];
+        for (let t = 0; t < s.idx.length; t += 3) { const ti = triInfo(s.idx, t); infos.push({ p: ti.p, n: ti.n, a: ti.area, tail, mat: s.material }); }
+        for (const type of types) { if (!lightTris.has(type)) lightTris.set(type, []); lightTris.get(type).push(...infos); }
       }
       if (!subsList.length) continue;
       const subsOut = subsList.map((s) => ({ material: s.material, ogreMaterial: ogreMaterial(s.material), idx: s.idx }));
@@ -3979,6 +3992,13 @@ footer p { margin: 0 0 6px; }
     // opts.lights: true, or {beams: false} (no headlight beams), {lenses: false} (lenses don't glow)
     // Default: flares and headlight beams; glowing lenses (materialflarebindings) crashed RoR 2026.01
     const lightOpt = opts.lights === undefined ? { lenses: false } : opts.lights === true ? {} : opts.lights || null;
+    // a left/right indicator lamp follows the side it is on (some models reuse the left
+    // signal material for the right lamp); RoR x points to the car's left
+    if (lightTris.has('l') || lightTris.has('r')) {
+      const all = [...(lightTris.get('l') || []), ...(lightTris.get('r') || [])];
+      lightTris.set('l', all.filter((t) => t.p[0] > 0.12 || (Math.abs(t.p[0]) <= 0.12 && (lightTris.get('l') || []).includes(t))));
+      lightTris.set('r', all.filter((t) => t.p[0] < -0.12 || (Math.abs(t.p[0]) <= 0.12 && (lightTris.get('r') || []).includes(t))));
+    }
     for (const type of lightOpt ? flareTypesOrder.filter((t) => lightOpt.beams !== false || !['f', 'h', 'g'].includes(t)) : []) {
       const tris = lightTris.get(type) || [];
       const clusters = new Map();
