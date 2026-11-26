@@ -20,7 +20,7 @@
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v35';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v36';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -3695,17 +3695,34 @@
       const tris = lightTris.get(type) || [];
       const clusters = new Map();
       // one lamp per material and side (a material can cover both headlights) ...
-      for (const t of tris) {
-        const key = `${t.mat}|${t.p[0] > 0.12 ? 'L' : t.p[0] < -0.12 ? 'R' : 'C'}`;
+      // a material can also cover the front AND rear lamp of one side: split each material
+      // into pieces of touching triangles (centres within 0.2 m), so each lamp gets its own flare
+      const piece = new Int32Array(tris.length).map((_, i) => i);
+      const root = (i) => { while (piece[i] !== i) i = piece[i] = piece[piece[i]]; return i; };
+      const grid = new Map(), G = 0.2;
+      tris.forEach((t, i) => {
+        const c3 = t.p.map((x) => Math.floor(x / G));
+        for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
+          for (const j of grid.get(`${c3[0] + dx},${c3[1] + dy},${c3[2] + dz}`) || []) {
+            if (tris[j].mat === t.mat && Math.hypot(...sub(tris[j].p, t.p)) < G) piece[root(i)] = root(j);
+          }
+        }
+        const k3 = c3.join(',');
+        if (!grid.has(k3)) grid.set(k3, []);
+        grid.get(k3).push(i);
+      });
+      tris.forEach((t, i) => {
+        const key = `${t.mat}|${t.p[0] > 0.12 ? 'L' : t.p[0] < -0.12 ? 'R' : 'C'}|${root(i)}`;
         if (!clusters.has(key)) clusters.set(key, { a: 0, p: [0, 0, 0], n: [0, 0, 0], pts: [] });
         const c2 = clusters.get(key);
         c2.a += t.a; c2.p = c2.p.map((x, i) => x + t.p[i] * t.a); c2.n = c2.n.map((x, i) => x + t.n[i]); c2.tail = c2.tail || t.tail;
         if (c2.pts.length < 4000) c2.pts.push(t.p);
-      }
+      });
       // ... then lens + housing of the same lamp (close together) become one
       const lamps = [];
+      const biggest = Math.max(0, ...[...clusters.values()].map((c2) => c2.a));
       for (const c2 of clusters.values()) {
-        if (c2.a < 1e-5) continue;
+        if (c2.a < 1e-5 || c2.a < 0.04 * biggest) continue; // stray bits of a lamp material
         const p = c2.p.map((x) => x / c2.a);
         const same = lamps.find((l2) => Math.hypot(...sub(l2.p, p)) < 0.25);
         if (same) { const a2 = same.a + c2.a; same.p = same.p.map((x, i) => (x * same.a + p[i] * c2.a) / a2); same.n = same.n.map((x, i) => x + c2.n[i]); same.a = a2; same.tail = same.tail || c2.tail; same.pts = same.pts.concat(c2.pts); }
@@ -3721,7 +3738,9 @@
         // shine level (lens normals of curved lenses point up); headlights straight ahead
         const upv = plan.up || [0, 1, 0];
         out = norm(sub(out, upv.map((x) => x * dot(out, upv))));
-        if (type === 'f' || type === 'h' || type === 'g') out = plan.fwd.slice();
+        // lamps lit with the headlights / fog lights but at the back of the car are tail lamps
+        const rear = (type === 'f' || type === 'h' || type === 'g') && along(p) < 0;
+        if ((type === 'f' || type === 'h' || type === 'g') && !rear) out = plan.fwd.slice();
         // frame whose normal points INTO the car (RoR shows the flare when seen from outside, and shines along -normal)
         const cand = nearestBody(p, 12);
         let best = null;
@@ -3748,9 +3767,9 @@
         const pull = Math.max(0.5, Math.min(30, dot(sub(target, onPlane), best.nn.map((x) => -x)) / 0.1));
         // negative size: RoR shows the glow from every angle (only headlights need a direction,
         // for their beam) - so a lamp whose lens faces an odd way is still seen
-        const size = type === 'f' || type === 'h' ? 0.6 : type === 'g' ? -0.45 : -0.35;
+        const size = rear ? -0.35 : type === 'f' || type === 'h' ? 0.6 : type === 'g' ? -0.45 : -0.35;
         // a lamp lit with the headlights at the front is a (white) sidelight, at the back a tail light
-        const ftype = type === 't' && along(p) > 0 ? 's' : type;
+        const ftype = rear ? 't' : type === 't' && along(p) > 0 ? 's' : type;
         // headlights (positive size) get their pull scaled by the viewing angle in RoR, so a long
         // pull would make the glow wander; then give up the beam and keep a fixed glow instead
         const fsize = size > 0 && pull > 2.5 ? -size : size;
