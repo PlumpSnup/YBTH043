@@ -209,7 +209,7 @@ footer p { margin: 0 0 6px; }
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v48';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v49';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -1389,8 +1389,8 @@ footer p { margin: 0 0 6px; }
         nrm = v3.norm(nrm);
         if (nrm[1] < 0) nrm = v3.scale(nrm, -1); // above the arm
         const hid = `j2r_tb${braceNodes++}`;
-        nodes.set(hid, { id: hid, pos: v3.add(cen, v3.scale(nrm, Math.min(0.15, Math.max(0.06, 0.5 * al)))), weight: 1, collision: false, friction: 1, groups: [], helper: true });
-        for (const id of ids) beams.push({ a: hid, b: id, spring: 4e6, damp: 100, deform: 1e5, strength: 1e6, support: false });
+        nodes.set(hid, { id: hid, pos: v3.add(cen, v3.scale(nrm, Math.min(0.15, Math.max(0.06, 0.5 * al)))), weight: 4, collision: false, friction: 1, groups: [], helper: true });
+        for (const id of ids) beams.push({ a: hid, b: id, spring: 1.5e6, damp: 150, deform: 1e5, strength: 1e6, support: false });
         continue;
       }
       if (sinPhi < 0.3) { rollBars++; continue; }
@@ -2622,13 +2622,14 @@ footer p { margin: 0 0 6px; }
     }
     // Strain check: a beam stretched/compressed by more than 50% means the structure collapsed
     let maxStrain = 0, collapsed = 0;
+    const collapsedList = [];
     for (const sp of springs) {
-      if (sp.shock) continue;
+      if (sp.shock || !(sp.k > 0)) continue; // a damper with no spring holds no shape
       const i3 = sp.i * 3, j3 = sp.j * 3;
       const L = Math.hypot(pos[j3] - pos[i3], pos[j3 + 1] - pos[i3 + 1], pos[j3 + 2] - pos[i3 + 2]);
       const strain = Math.abs(L - sp.Lr) / sp.Lr;
       if (isFinite(strain)) maxStrain = Math.max(maxStrain, strain); else maxStrain = Infinity;
-      if (!(strain < 0.5)) collapsed++;
+      if (!(strain < 0.5)) { collapsed++; if (collapsedList.length < 10) collapsedList.push(`${ids[sp.i]}-${ids[sp.j]} x${(1 + strain).toFixed(2)}`); }
     }
     // Unstable = blew up, collapsed, or motion still growing late in the test. Parts that
     // are free to swing (doors, hood) or a car still gently settling are not instability.
@@ -2658,7 +2659,7 @@ footer p { margin: 0 0 6px; }
       });
     }
     const overshoots = springs.filter((sp) => sp.shock && sp.maxX > 0).map((sp) => ({ a: ids[sp.i], b: ids[sp.j], x: sp.maxX, F: sp.maxF })).sort((p, q) => Math.abs(q.F) - Math.abs(p.F));
-    return { deformEvents, lateDeform, stable, overshoots, broken: brokenLog, engine: extra.drive ? eng : undefined, contact, fastest, watched, probe, firstBlow, maxSpeedMid: +maxSpeedMid.toFixed(3), maxSpeedLate: +maxSpeedLate.toFixed(3), maxStrain: +maxStrain.toFixed(3), collapsedBeams: collapsed, hotNodes, seconds: +(steps * dt).toFixed(1) };
+    return { deformEvents, lateDeform, stable, overshoots, broken: brokenLog, engine: extra.drive ? eng : undefined, contact, fastest, watched, probe, firstBlow, maxSpeedMid: +maxSpeedMid.toFixed(3), maxSpeedLate: +maxSpeedLate.toFixed(3), maxStrain: +maxStrain.toFixed(3), collapsedBeams: collapsed, collapsedList, hotNodes, seconds: +(steps * dt).toFixed(1) };
   }
 
   /**
