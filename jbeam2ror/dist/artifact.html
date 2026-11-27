@@ -202,7 +202,7 @@ footer p { margin: 0 0 6px; }
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v49';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v50';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -1912,6 +1912,10 @@ footer p { margin: 0 0 6px; }
     // Interior views (RoR cinecams): the driver's seat and the hood. Each cinecam looks along
     // the 'cameras' line with the same index, so one line per view. In RoR, C steps through them.
     const cams = [];
+    // A cinecam hangs a 20 kg camera node on 8 nodes with springs and strong damping (800):
+    // on a very light node (a 0.26 kg windscreen node on the Hirochi Talent) that damping is
+    // too strong for RoR's 2000 Hz step and the node is torn away. Heavier nodes only.
+    const camNodeOk = (id) => { const nd = nodes.get(id); return !!nd && nd.weight >= 2 && !nd.helper; };
     {
       const rows = [...rowsOf('camerasInternal')].filter((r) => r.cols.x !== undefined);
       // the driver's view first
@@ -1923,7 +1927,7 @@ footer p { margin: 0 0 6px; }
         seen.add(key);
         const pos = toRoR(num(r.cols.x, 0), num(r.cols.y, 0), num(r.cols.z, 0));
         const attach = [];
-        for (const k of ['id1', 'id2', 'id3', 'id4', 'id5', 'id6', 'id7', 'id8']) if (hasNode(r.cols[k]) && !attach.includes(String(r.cols[k]))) attach.push(String(r.cols[k]));
+        for (const k of ['id1', 'id2', 'id3', 'id4', 'id5', 'id6', 'id7', 'id8']) if (hasNode(r.cols[k]) && camNodeOk(String(r.cols[k])) && !attach.includes(String(r.cols[k]))) attach.push(String(r.cols[k]));
         cams.push({ name: String(r.cols.type || 'view'), pos, attach, back: false });
       }
       const ax = (p, d) => v3.dot(p, d);
@@ -1970,6 +1974,7 @@ footer p { margin: 0 0 6px; }
       }
       for (const c of cams) {
         const ex = new Set(c.attach);
+        for (const nd of nodes.values()) if (!camNodeOk(nd.id)) ex.add(nd.id);
         while (c.attach.length < 8) { const nn = nearestNode(c.pos, ex); if (!nn) break; c.attach.push(nn); ex.add(nn); }
       }
       for (let i = cams.length - 1; i >= 0; i--) if (cams[i].attach.length < 8) cams.splice(i, 1);
