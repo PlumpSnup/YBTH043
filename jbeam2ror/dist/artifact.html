@@ -202,7 +202,7 @@ footer p { margin: 0 0 6px; }
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v51';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v52';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -224,9 +224,12 @@ footer p { margin: 0 0 6px; }
     O: 'Even lighter wheels: tyre nodes 1.3 kg',
     P: 'Light wheels like BeamNG: tyre nodes 1.1 kg (less rolling drag, may shake)',
     Q: 'Very light wheels: tyre nodes 0.8 kg (least rolling drag, may shake)',
+    R: 'No interior cameras (driver / hood views)',
+    S: 'Torsion bars left out (no frame / spring-seat bracing)',
+    T: 'Wheel hubs as light as in v50 (no extra hub weight)',
   };
   // The builds offered in the test pack right now (the wheel tests A-E are settled)
-  const PACK = ['O'];
+  const PACK = ['R', 'S', 'B', 'L', 'T'];
 
   // BeamNG defaults (used when a JBeam file does not set a value).
   const BNG = {
@@ -1358,7 +1361,7 @@ footer p { margin: 0 0 6px; }
     // 1/2 k dphi^2 = 1/2 kb dL^2, dL/dphi = r1 r4 sin(phi) / L). Cars use stiff ones to brace
     // suspension mounts. Anti-roll bars have parallel arms (sin ~ 0): those can't be done.
     let rollBars = 0, braceNodes = 0;
-    for (const { cols, props } of rowsOf('torsionbars')) {
+    for (const { cols, props } of (X === 'S' ? [] : rowsOf('torsionbars'))) {
       const ids = [cols.id1, cols.id2, cols.id3, cols.id4].map(String);
       if (!ids.every(hasNode) || new Set(ids).size < 4) continue;
       const [p1, p2, p3, p4] = ids.map((id) => nodes.get(id).pos);
@@ -1773,7 +1776,7 @@ footer p { margin: 0 0 6px; }
     // brake / drive torque into the arm node. Very light ones under a heavy RoR wheel shake
     // apart (Hirochi Talent: 38 kg wheels on 2.3 kg hubs, 1.7 kg arm). Give them a fair share,
     // borrowed from neighbouring nodes so the total weight is unchanged.
-    if (opts.massFix !== false) {
+    if (opts.massFix !== false && X !== 'T') {
       for (const w of wheels) {
         const wm = num(w.mass, 0);
         if (!(wm > 0)) continue;
@@ -1978,7 +1981,8 @@ footer p { margin: 0 0 6px; }
         }
       }
       // two views: the driver's seat and the hood (RoR has its own outside cameras)
-      {
+      if (X === 'R') cams.length = 0;
+      else {
         const drv = cams.find((c) => /^(dash|driver)/i.test(c.name));
         const hood = cams.find((c) => /hood|bonnet/i.test(c.name));
         cams.length = 0;
