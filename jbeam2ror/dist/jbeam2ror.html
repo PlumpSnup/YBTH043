@@ -209,7 +209,7 @@ footer p { margin: 0 0 6px; }
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v44';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v45';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -1916,8 +1916,75 @@ footer p { margin: 0 0 6px; }
       L.push(`${N(nd.id)}, ${fmt(nd.pos[0])}, ${fmt(nd.pos[1])}, ${fmt(nd.pos[2])}, ${opt}, ${fmt(nd.weight, 4)} ;${nd.id}`);
     }
     L.push('');
+    // Interior views (RoR cinecams): the driver's seat and the hood. Each cinecam looks along
+    // the 'cameras' line with the same index, so one line per view. In RoR, C steps through them.
+    const cams = [];
+    {
+      const rows = [...rowsOf('camerasInternal')].filter((r) => r.cols.x !== undefined);
+      // the driver's view first
+      rows.sort((a, b) => (/^(dash|driver)/i.test(String(b.cols.type || '')) ? 1 : 0) - (/^(dash|driver)/i.test(String(a.cols.type || '')) ? 1 : 0));
+      const seen = new Set();
+      for (const r of rows) {
+        const key = String(r.cols.type || '') + '|' + [r.cols.x, r.cols.y, r.cols.z].join(',');
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const pos = toRoR(num(r.cols.x, 0), num(r.cols.y, 0), num(r.cols.z, 0));
+        const attach = [];
+        for (const k of ['id1', 'id2', 'id3', 'id4', 'id5', 'id6', 'id7', 'id8']) if (hasNode(r.cols[k]) && !attach.includes(String(r.cols[k]))) attach.push(String(r.cols[k]));
+        cams.push({ name: String(r.cols.type || 'view'), pos, attach, back: false });
+      }
+      const ax = (p, d) => v3.dot(p, d);
+      const all = [...nodes.values()].map((nd) => nd.pos);
+      const maxF = Math.max(...all.map((p) => ax(p, fwd)));
+      // No driver's view in the mod: estimate the driver's eye from the roof: a little behind
+      // the top of the windscreen, below the roof, on the steering-wheel side
+      const estimateDriver = () => {
+        // the roof over the middle of the cabin (ignores spoilers, antennas and the car's ends)
+        const cl = ax(center, left), cf = ax(center, fwd);
+        const fs = all.map((p) => ax(p, fwd)), minF = Math.min(...fs), len = maxF - minF;
+        // the middle 60 % of the car's length, near the centre line
+        const mid = all.filter((p) => Math.abs(ax(p, left) - cl) < 0.6 && ax(p, fwd) > minF + 0.2 * len && ax(p, fwd) < maxF - 0.2 * len);
+        if (mid.length < 3) return null;
+        const hs = mid.map((p) => ax(p, up)).sort((x, y) => y - x);
+        const roofY = hs[Math.min(1, hs.length - 1)]; // skip one antenna / roof-rack node
+        // the roof's front edge (top of the windscreen)
+        const roof = mid.filter((p) => ax(p, up) > roofY - 0.08 && ax(p, up) < roofY + 0.05);
+        const roofFront = Math.max(cf, ...roof.map((p) => ax(p, fwd)));
+        const side = 1; // the left seat (RoR x points to the car's left): most BeamNG cars are left-hand drive
+        return v3.add(v3.add(v3.scale(left, cl + side * 0.37), v3.scale(fwd, roofFront - 0.5)), v3.scale(up, roofY - 0.2));
+      };
+      if (opts.debugDriverEstimate) { const e = estimateDriver(); warn(`driver estimate ${e && e.map((x) => x.toFixed(2)).join(',')}`); }
+      if (!cams.some((c) => /^(dash|driver)/i.test(c.name))) {
+        const pos = estimateDriver();
+        if (pos) cams.unshift({ name: 'driver (added)', pos, attach: [], back: false });
+      }
+      if (!cams.some((c) => /hood|bonnet/i.test(c.name))) {
+        // hood camera: over the middle of the hood, a little above it
+        const front = all.filter((p) => ax(p, fwd) > maxF - 1.1 && ax(p, fwd) < maxF - 0.5);
+        if (front.length) {
+          const top = Math.max(...front.map((p) => ax(p, up)));
+          const pos = v3.add(v3.add(v3.scale(left, ax(center, left)), v3.scale(fwd, maxF - 0.9)), v3.scale(up, top + 0.15));
+          cams.push({ name: 'hood (added)', pos, attach: [], back: false });
+        }
+      }
+      // two views: the driver's seat and the hood (RoR has its own outside cameras)
+      {
+        const drv = cams.find((c) => /^(dash|driver)/i.test(c.name));
+        const hood = cams.find((c) => /hood|bonnet/i.test(c.name));
+        cams.length = 0;
+        if (drv) cams.push(drv);
+        if (hood) cams.push(hood);
+      }
+      for (const c of cams) {
+        const ex = new Set(c.attach);
+        while (c.attach.length < 8) { const nn = nearestNode(c.pos, ex); if (!nn) break; c.attach.push(nn); ex.add(nn); }
+      }
+      for (let i = cams.length - 1; i >= 0; i--) if (cams[i].attach.length < 8) cams.splice(i, 1);
+    }
     L.push('cameras');
     L.push(`${N(ref.ref)}, ${N(ref.back)}, ${N(ref.left)}`);
+    // one more per extra view (the first line serves the first view)
+    for (const c of cams.slice(1)) L.push(c.back ? `${N(ref.back)}, ${N(ref.ref)}, ${N(ref.left)} ; ${c.name}` : `${N(ref.ref)}, ${N(ref.back)}, ${N(ref.left)} ; ${c.name}`);
     L.push('');
 
     // Air drag. Without a fusedrag section RoR adds turbulent drag to EVERY node
@@ -1945,22 +2012,17 @@ footer p { margin: 0 0 6px; }
       L.push('');
     }
 
-    // Cinecam (driver view) from BeamNG's internal camera, if present
+    // Cinecams: driver's view and hood view (BeamNG's own where the mod has them, else estimated)
     let numCinecams = 0; // every cinecam adds a node before RoR builds the wheel nodes
-    const camRow = firstTable('camerasInternal');
-    if (camRow && camRow.cols.x !== undefined) {
-      const cp = toRoR(num(camRow.cols.x, 0), num(camRow.cols.y, 0), num(camRow.cols.z, 0));
-      const attach = [];
-      for (const key of ['id1', 'id2', 'id3', 'id4', 'id5', 'id6', 'id7', 'id8']) if (hasNode(camRow.cols[key])) attach.push(String(camRow.cols[key]));
-      const ex = new Set(attach);
-      while (attach.length < 8) { const nn = nearestNode(cp, ex); if (!nn) break; attach.push(nn); ex.add(nn); }
-      if (attach.length === 8) {
-        L.push(SAFE_DEFAULTS);
-        L.push('cinecam');
+    if (cams.length) {
+      L.push(SAFE_DEFAULTS);
+      L.push('; interior views (in RoR: C cycles through them): ' + cams.map((c) => c.name).join(', '));
+      L.push('cinecam');
+      for (const c of cams) {
+        L.push(`${fmt(c.pos[0])}, ${fmt(c.pos[1])}, ${fmt(c.pos[2])}, ${c.attach.map(N).join(', ')}, 8000, 800`);
         numCinecams++;
-        L.push(`${fmt(cp[0])}, ${fmt(cp[1])}, ${fmt(cp[2])}, ${attach.map(N).join(', ')}, 8000, 800`);
-        L.push('');
       }
+      L.push('');
     }
 
     // Beams grouped by identical settings
