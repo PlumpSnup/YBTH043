@@ -209,7 +209,7 @@ footer p { margin: 0 0 6px; }
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v47';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v48';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -2821,6 +2821,7 @@ footer p { margin: 0 0 6px; }
   // 4x4 row-major matrices (Collada convention: v' = M v, column vectors)
   const m4 = {
     id: () => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+    isId: (m) => m.every((v, i) => Math.abs(v - (i % 5 === 0 ? 1 : 0)) < 1e-6),
     mul(a, b) { const o = new Array(16); for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) { let s = 0; for (let k = 0; k < 4; k++) s += a[r * 4 + k] * b[k * 4 + c]; o[r * 4 + c] = s; } return o; },
     rot(ax, ay, az, deg) {
       const l = Math.hypot(ax, ay, az) || 1; const x = ax / l, y = ay / l, z = az / l;
@@ -3671,6 +3672,8 @@ footer p { margin: 0 0 6px; }
       let color = Array.isArray(s0.baseColorFactor) ? s0.baseColorFactor.slice(0, 3).map(Number) : Array.isArray(s0.diffuseColor) ? s0.diffuseColor.slice(0, 3).map(Number) : [1, 1, 1];
       // texture from the base game (or another car): plain grey, not white
       if (!tex && (!hasFactor || texMissing)) color = texMissing && hasFactor ? color.map((c) => Math.min(0.55, c * 0.55)) : [0.55, 0.55, 0.57];
+      // a base-game tyre material: tyre black, not grey
+      if (!tex && (!def || texMissing) && /tire|tyre/i.test(bngName)) color = [0.07, 0.07, 0.07];
       // Paint: BeamNG lays the paint over the colour texture through a mask (the paint
       // stage's opacityMap). With the mask we bake the paint into the texture so trim and
       // chrome keep their colour; without it the whole material is tinted.
@@ -3769,6 +3772,7 @@ footer p { margin: 0 0 6px; }
     const lightTris = new Map(); // flare type -> [{p, n, a, tail}]
     const lightMats = new Map(); // OGRE material -> flare type
     const rimOf = new Map(); // wheel -> rim vertex arrays (to size the tyre)
+    const modTyred = new Set(); // wheels with the mod's own tyre model
     const wheelOf = (gname) => {
       for (const w of plan.wheels || []) if (w.groups.includes(gname)) return w;
       const m = /^(?:wheel|wheelhub|hubcap|tire|tyre)_(.+)$/i.exec(gname);
@@ -3798,8 +3802,18 @@ footer p { margin: 0 0 6px; }
       const dae = daeFor(e);
       const item = dae.meshes.get(fb.mesh);
       if (!item) { missingMesh.push(fb.mesh); continue; }
-      if (!item.cache) item.cache = geometryOf(dae, item);
-      const g = item.cache;
+      // A flexbody with its own pos / rot is placed from the mesh's local shape: BeamNG ignores
+      // the model file's node transform then (a mod can keep the plate already moved in its
+      // .dae and move it again in the jbeam; applying both put the SUV's plate above the roof)
+      const placed = (fb.pos && fb.pos.some((x) => x)) || (fb.rot && fb.rot.some((x) => x));
+      let g;
+      if (placed && item.matrix && !m4.isId(item.matrix)) {
+        if (!item.localCache) item.localCache = geometryOf(dae, Object.assign({}, item, { matrix: m4.id() }));
+        g = item.localCache;
+      } else {
+        if (!item.cache) item.cache = geometryOf(dae, item);
+        g = item.cache;
+      }
       if (!g || !g.subs.length) continue;
       // forset: the nodes of the flexbody's groups
       let forset = fb.nodes.slice();
@@ -3905,7 +3919,9 @@ footer p { margin: 0 0 6px; }
         lp[v * 3] = dot(d, ax); lp[v * 3 + 1] = dot(d, normal); lp[v * 3 + 2] = dot(d, az);
         ln[v * 3] = dot(nn, ax); ln[v * 3 + 1] = dot(nn, normal); ln[v * 3 + 2] = dot(nn, az);
       }
-      if (wheel && !/brake|drum|disc|caliper|hub_|centercap|hubcap/i.test(fb.mesh)) (rimOf.get(wheel) || rimOf.set(wheel, []).get(wheel)).push(world);
+      // the mod's own tyre model: RoR's plain wheel must be hidden there; it doesn't size a rim
+      if (wheel && /tire|tyre/i.test(fb.mesh)) modTyred.add(wheel.name);
+      else if (wheel && !/brake|drum|disc|caliper|hub_|centercap|hubcap/i.test(fb.mesh)) (rimOf.get(wheel) || rimOf.set(wheel, []).get(wheel)).push(world);
       // Mirror glass becomes a working RoR mirror (a prop); lamp lenses tell where the flares go
       let subsList = g.subs;
       const triInfo = (idx, t) => {
@@ -3995,6 +4011,7 @@ footer p { margin: 0 0 6px; }
       if (opts.previewData) (result.preview = result.preview || []).push({ mesh: label, world: Float64Array.from(pos), idx: [idx] });
     }
     for (const w of opts.skipWheels ? [] : plan.wheels || []) {
+      if (modTyred.has(w.name)) continue; // the mod's own tyre is there
       const rims = rimOf.get(w) || null;
       const c = w.center, a = w.axis;
       const R = w.radius;
@@ -4207,11 +4224,13 @@ footer p { margin: 0 0 6px; }
         if (!grid.has(k3)) grid.set(k3, []);
         grid.get(k3).push(i);
       });
+      // one lamp per connected piece (a strip across the middle of the car stays one lamp)
       tris.forEach((t, i) => {
-        const key = `${t.mat}|${t.p[0] > 0.12 ? 'L' : t.p[0] < -0.12 ? 'R' : 'C'}|${root(i)}`;
-        if (!clusters.has(key)) clusters.set(key, { a: 0, p: [0, 0, 0], n: [0, 0, 0], pts: [] });
+        const key = `${t.mat}|${root(i)}`;
+        if (!clusters.has(key)) clusters.set(key, { a: 0, p: [0, 0, 0], n: [0, 0, 0], pts: [], mats: new Set() });
         const c2 = clusters.get(key);
         c2.a += t.a; c2.p = c2.p.map((x, i) => x + t.p[i] * t.a); c2.n = c2.n.map((x, i) => x + t.n[i]); c2.tail = c2.tail || t.tail;
+        c2.mats.add(t.mat);
         if (c2.pts.length < 4000) c2.pts.push(t.p);
       });
       // ... then lens + housing of the same lamp (close together) become one
@@ -4221,8 +4240,23 @@ footer p { margin: 0 0 6px; }
         if (c2.a < 1e-5 || c2.a < 0.04 * biggest) continue; // stray bits of a lamp material
         const p = c2.p.map((x) => x / c2.a);
         const same = lamps.find((l2) => Math.hypot(...sub(l2.p, p)) < 0.25);
-        if (same) { const a2 = same.a + c2.a; same.p = same.p.map((x, i) => (x * same.a + p[i] * c2.a) / a2); same.n = same.n.map((x, i) => x + c2.n[i]); same.a = a2; same.tail = same.tail || c2.tail; same.pts = same.pts.concat(c2.pts); }
-        else lamps.push({ a: c2.a, p, n: c2.n.slice(), tail: c2.tail, pts: c2.pts.slice() });
+        if (same) { const a2 = same.a + c2.a; same.p = same.p.map((x, i) => (x * same.a + p[i] * c2.a) / a2); same.n = same.n.map((x, i) => x + c2.n[i]); same.a = a2; same.tail = same.tail || c2.tail; same.pts = same.pts.concat(c2.pts); c2.mats.forEach((m) => same.mats.add(m)); }
+        else lamps.push({ a: c2.a, p, n: c2.n.slice(), tail: c2.tail, pts: c2.pts.slice(), mats: new Set(c2.mats) });
+      }
+      // A wide light strip (a light bar across the tailgate or grille) gets a row of small glows
+      // along it instead of one big glow in the middle
+      for (const lamp of lamps.splice(0)) {
+        const xs = lamp.pts.map((q) => q[0]);
+        const x0 = Math.min(...xs), x1 = Math.max(...xs), span = x1 - x0;
+        if (span < 0.45 || lamp.pts.length < 6) { lamps.push(lamp); continue; }
+        const nSeg = Math.min(7, Math.ceil(span / 0.3));
+        for (let k = 0; k < nSeg; k++) {
+          const lo = x0 + span * k / nSeg, hi = x0 + span * (k + 1) / nSeg;
+          const part = lamp.pts.filter((q) => q[0] >= lo && (q[0] < hi || k === nSeg - 1));
+          if (part.length < 2) continue;
+          const pc = [0, 1, 2].map((i) => part.reduce((acc, q) => acc + q[i], 0) / part.length);
+          lamps.push({ a: lamp.a / nSeg, p: pc, n: lamp.n.slice(), tail: lamp.tail, pts: part, mats: lamp.mats, strip: true });
+        }
       }
       const made = [];
       for (const c2 of lamps) {
@@ -4266,13 +4300,16 @@ footer p { margin: 0 0 6px; }
         const pull = Math.max(beam ? 0.5 : 0.8, Math.min(30, dot(sub(target, onPlane), best.nn.map((x) => -x)) / 0.1));
         // negative size: RoR shows the glow from every angle (only headlights need a direction,
         // for their beam) - so a lamp whose lens faces an odd way is still seen
-        const size = rear ? -0.35 : type === 'f' || type === 'h' ? 0.6 : type === 'g' ? -0.45 : -0.35;
+        // rear fog lamps: RoR has no red fog light, and they must not glow with the headlights
+        if (type === 'g' && along(p) < 0) continue;
+        let size = rear ? -0.35 : type === 'f' || type === 'h' ? 0.6 : type === 'g' ? -0.45 : -0.35;
+        if (c2.strip) size = size > 0 ? -0.25 : Math.max(size, -0.2);
         // a lamp lit with the headlights at the front is a (white) sidelight, at the back a tail light
         const ftype = rear ? 't' : type === 't' && along(p) > 0 ? 's' : type;
         // headlights (positive size) get their pull scaled by the viewing angle in RoR, so a long
         // pull would make the glow wander; then give up the beam and keep a fixed glow instead
         const fsize = size > 0 && pull > 2.5 ? -size : size;
-        flareLines.push(`${best.f.map(plan.num).join(', ')}, ${fixed(o[0])}, ${fixed(o[1])}, ${fixed(pull, 2)}, ${ftype}, -1, ${type === 'l' || type === 'r' ? -1 : 0}, ${fsize}, default`);
+        flareLines.push(`${best.f.map(plan.num).join(', ')}, ${fixed(o[0])}, ${fixed(o[1])}, ${fixed(pull, 2)}, ${ftype}, -1, ${type === 'l' || type === 'r' ? -1 : 0}, ${fsize}, default ;${[...c2.mats].join(' ')}`);
         made.push(nFlares++);
         // brake lamps that are also tail lamps: a tail flare too, so they glow at night
         if (type === 'b' && c2.tail) { flareLines.push(`${best.f.map(plan.num).join(', ')}, ${fixed(o[0])}, ${fixed(o[1])}, ${fixed(pull, 2)}, t, -1, 0, -0.25, default`); nFlares++; }
@@ -4296,8 +4333,8 @@ footer p { margin: 0 0 6px; }
       ...(bindLines.length ? ['; lamp lenses glow while their flare is on', 'materialflarebindings', ...bindLines, ''] : []),
     ].join('\n');
     result.truck = result.truck.replace(/\nend\n*$/, `\n${fbSection}\nend\n`);
-    for (const name of tyred) result.truck = result.truck.replace(new RegExp(`, tracks/wheelface, tracks/wheelband1 ;${name.replace(/[^A-Za-z0-9_]/g, '\\$&')}$`, 'm'), `, ${hiddenMat}, ${hiddenMat} ;${name}`);
-    if (tyred.length) {
+    for (const name of [...tyred, ...modTyred]) result.truck = result.truck.replace(new RegExp(`, tracks/wheelface, tracks/wheelband1 ;${name.replace(/[^A-Za-z0-9_]/g, '\\$&')}$`, 'm'), `, ${hiddenMat}, ${hiddenMat} ;${name}`);
+    if (tyred.length || modTyred.size) {
       ogreMats.set('#hidden', { name: hiddenMat, text: [`material ${hiddenMat}`, '{', '\ttechnique', '\t{', '\t\tpass', '\t\t{', '\t\t\tcolour_write off', '\t\t\tdepth_write off', '\t\t}', '\t}', '}', ''].join('\n') });
       ogreMats.set('#rim', { name: rimMat, text: [`material ${rimMat}`, '{', '\treceive_shadows on', '\ttechnique', '\t{', '\t\tpass', '\t\t{', '\t\t\tambient 0.45 0.46 0.48', '\t\t\tdiffuse 0.55 0.56 0.58 1', '\t\t\tspecular 0.6 0.6 0.6 1 40', '\t\t\tcull_hardware none', '\t\t}', '\t}', '}', ''].join('\n') });
       ogreMats.set('#tyre', { name: tyreMat, text: [`material ${tyreMat}`, '{', '\treceive_shadows on', '\ttechnique', '\t{', '\t\tpass', '\t\t{', '\t\t\tambient 0.07 0.07 0.07', '\t\t\tdiffuse 0.07 0.07 0.07 1', '\t\t\tspecular 0.12 0.12 0.12 1 10', '\t\t\tcull_hardware none', '\t\t}', '\t}', '}', ''].join('\n') });
