@@ -202,7 +202,7 @@ footer p { margin: 0 0 6px; }
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v45';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v46';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -4252,8 +4252,11 @@ footer p { margin: 0 0 6px; }
         // just in front of the outermost point of the lens so the housing doesn't hide it.
         const outer = Math.max(0, ...c2.pts.map((q) => dot(sub(q, p), out)));
         const onPlane = [0, 1, 2].map((i) => P0(best.f[0])[i] + o[0] * best.dx[i] + o[1] * best.dy[i]);
-        const target = [0, 1, 2].map((i) => p[i] + out[i] * (outer + 0.03));
-        const pull = Math.max(0.5, Math.min(30, dot(sub(target, onPlane), best.nn.map((x) => -x)) / 0.1));
+        // headlights stay close (their glow follows the viewing angle); the other lamps' glows
+        // (seen from all sides) sit well clear so the bodywork around the lamp doesn't cut them off
+        const beam = (type === 'f' || type === 'h') && !rear;
+        const target = [0, 1, 2].map((i) => p[i] + out[i] * (outer + (beam ? 0.03 : 0.05)));
+        const pull = Math.max(beam ? 0.5 : 0.6, Math.min(30, dot(sub(target, onPlane), best.nn.map((x) => -x)) / 0.1));
         // negative size: RoR shows the glow from every angle (only headlights need a direction,
         // for their beam) - so a lamp whose lens faces an odd way is still seen
         const size = rear ? -0.35 : type === 'f' || type === 'h' ? 0.6 : type === 'g' ? -0.45 : -0.35;
