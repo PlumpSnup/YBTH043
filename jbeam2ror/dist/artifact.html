@@ -202,7 +202,7 @@ footer p { margin: 0 0 6px; }
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v50';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v51';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -1768,6 +1768,19 @@ footer p { margin: 0 0 6px; }
       for (const id of ids) raise(id, map.get(id));
       return ids.length;
     };
+
+    // Wheel hubs: RoR hangs each wheel (tread nodes) on its two axle nodes and pushes its
+    // brake / drive torque into the arm node. Very light ones under a heavy RoR wheel shake
+    // apart (Hirochi Talent: 38 kg wheels on 2.3 kg hubs, 1.7 kg arm). Give them a fair share,
+    // borrowed from neighbouring nodes so the total weight is unchanged.
+    if (opts.massFix !== false) {
+      for (const w of wheels) {
+        const wm = num(w.mass, 0);
+        if (!(wm > 0)) continue;
+        for (const id of [w.n1, w.n2]) if (nodes.has(id)) raise(id, Math.max(nodes.get(id).weight, wm * 0.15));
+        if (nodes.has(w.arm)) raise(w.arm, Math.max(nodes.get(w.arm).weight, wm * 0.1));
+      }
+    }
 
     const stabLinks = () => [...beams.map((b) => ({ a: b.a, b: b.b, k: b.spring, c: b.damp })),
       ...shocks.map((x) => ({ a: x.a, b: x.b, k: x.spring, c: x.damp })),
