@@ -209,7 +209,7 @@ footer p { margin: 0 0 6px; }
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v56';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v57';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -234,9 +234,14 @@ footer p { margin: 0 0 6px; }
     R: 'No interior cameras (driver / hood views)',
     S: 'Torsion bars left out (no frame / spring-seat bracing)',
     T: 'Wheel hubs as light as in v50 (no extra hub weight)',
+    U: 'Leaf springs 3x stiffer',
+    V: "The leaf spring's own beams can't bend",
+    W: "BeamNG's leaf beams also kept as plain beams",
+    Y: 'No parking brake on any wheel',
+    Z: 'No leaf-spring stand-in (as in v54)',
   };
   // The builds offered in the test pack right now (the wheel tests A-E are settled)
-  const PACK = ['R', 'S', 'B', 'L', 'T'];
+  const PACK = ['U', 'V', 'W', 'Y', 'Z', 'B'];
 
   // BeamNG defaults (used when a JBeam file does not set a value).
   const BNG = {
@@ -1212,7 +1217,7 @@ footer p { margin: 0 0 6px; }
         // a leaf spring half (bending beam through a third node): handled below as a whole
         const c3 = props['id3:'] !== undefined ? props['id3:'] : props.id3 !== undefined ? props.id3 : cols.id3;
         lbeams.push({ a: String(a), b: String(b), c: c3 !== undefined ? String(c3) : null, spring: Math.max(0, num(props.beamSpring, BNG.beamSpring)), damp: Math.max(0, num(props.beamDamp, BNG.beamDamp)) });
-        continue;
+        if (X !== 'W') continue;
       }
       if (type === 'BROKEN') continue;
       const bp = beamProps(props);
@@ -1302,7 +1307,11 @@ footer p { margin: 0 0 6px; }
     // centre, to the spring eye). RoR has no bending beam, and the leaf runs almost level, so
     // as a plain beam it would hold nothing up. Instead the leaf centre gets a vertical spring
     // up to the body node right above it, levelled below to the design ride height.
-    if (lbeams.length) {
+    if (X === 'V' && lbeams.length) {
+      const leafSet = new Set(lbeams.flatMap((l) => [l.a, l.b, l.c].filter(Boolean)));
+      for (const b of beams) if (leafSet.has(b.a) && leafSet.has(b.b)) { b.deform = BIG; b.strength = BIG; }
+    }
+    if (lbeams.length && X !== 'Z') {
       // The node the leaf's bending holds up is its third node (id3: the leaf centre the axle
       // sits on); without one, the node the leaf beams share (the axle end)
       const byAxle = new Map();
@@ -1326,7 +1335,7 @@ footer p { margin: 0 0 6px; }
         }
         if (!best) continue;
         const L = v3.len(v3.sub(nodes.get(best).pos, p));
-        const k = Math.max(15000, Math.min(80000, 0.1 * e.k));
+        const k = Math.max(15000, Math.min(80000, 0.1 * e.k)) * (X === 'U' ? 3 : 1);
         shocks.push({ a: id, b: best, spring: k, damp: Math.max(300, 0.04 * k), sb: 0.9, lb: 2, precomp: 1 + 0.05 / L, hardK: k, hardD: Math.max(300, 0.04 * k),
           deform: BIG, strength: BIG, air: true, leaf: true });
         made++;
@@ -1673,7 +1682,7 @@ footer p { margin: 0 0 6px; }
       const { spring, damp } = rorTyre(nodeMass, radius, Math.min(1.2e6, Math.max(1.5e5, 13000 * psi)));
       const brakeTorque = num(p.brakeTorque, 0);
       const parkTorque = num(p.parkingTorque, 0);
-      const braked = p.enableBrakes === false ? 0 : (brakeTorque > 0 || p.brakeTorque === undefined) ? (parkTorque > 0 ? 1 : 4) : 0;
+      const braked = p.enableBrakes === false ? 0 : (brakeTorque > 0 || p.brakeTorque === undefined) ? (parkTorque > 0 && X !== 'Y' ? 1 : 4) : 0;
       wheels.push({
         name: w.name, n1, n2, snode, arm: String(arm), radius, width: num(p.tireWidth, 0.2), rays, mass, spring, damp,
         braked, propulsed: driven.has(w.name) ? 1 : 0, brakeTorque, parkTorque,
