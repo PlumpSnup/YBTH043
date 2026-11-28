@@ -20,7 +20,7 @@
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v57';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v58';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -50,9 +50,10 @@
     W: "BeamNG's leaf beams also kept as plain beams",
     Y: 'No parking brake on any wheel',
     Z: 'No leaf-spring stand-in (as in v54)',
+    X: 'No wheels driven (engine runs but is not connected)',
   };
   // The builds offered in the test pack right now (the wheel tests A-E are settled)
-  const PACK = ['U', 'V', 'W', 'Y', 'Z', 'B'];
+  const PACK = ['X', 'H', 'G', 'C', 'F'];
 
   // BeamNG defaults (used when a JBeam file does not set a value).
   const BNG = {
@@ -1496,7 +1497,7 @@
       const braked = p.enableBrakes === false ? 0 : (brakeTorque > 0 || p.brakeTorque === undefined) ? (parkTorque > 0 && X !== 'Y' ? 1 : 4) : 0;
       wheels.push({
         name: w.name, n1, n2, snode, arm: String(arm), radius, width: num(p.tireWidth, 0.2), rays, mass, spring, damp,
-        braked, propulsed: driven.has(w.name) ? 1 : 0, brakeTorque, parkTorque,
+        braked, propulsed: driven.has(w.name) && X !== 'X' ? 1 : 0, brakeTorque, parkTorque,
         center: v3.mid(nodes.get(n1).pos, nodes.get(n2).pos),
         groups: [w.cols.group, w.cols.hubGroup, p.group].flatMap((g) => (Array.isArray(g) ? g : [g])).filter((g) => typeof g === 'string' && g),
         rimRadius: num(p.hubRadius, 0), tireWidth: num(p.tireWidth, 0),
