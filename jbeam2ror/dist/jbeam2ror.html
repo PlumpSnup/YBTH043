@@ -209,7 +209,7 @@ footer p { margin: 0 0 6px; }
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v52';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v53';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -968,10 +968,26 @@ footer p { margin: 0 0 6px; }
       };
     }
     const used = new Set();
-    function resolve(name, slotOptions, depth) {
+    // A base-game wheel the mod has no pattern for (e.g. the Ibishu Shima uses BeamNG's Pigeon
+    // wheels): a stand-in part. Its hub nodes are made once all nodes are known, next to the
+    // suspension nodes the hub connects to; its tyre slot takes the configuration's tyre.
+    function genericWheel(name, slotName) {
+      const m = /^wheel_([FR])(_|$)/i.exec(String(slotName || ''));
+      if (!m || !/wheel/i.test(name)) return null;
+      const side = m[1].toUpperCase();
+      const tireSlots = Object.keys(pcParts).filter((k) => new RegExp(`^tire_${side}(_|$)`, 'i').test(k) && pcParts[k]);
+      synthesized.push(`${name} (no pattern in the mod: plain hubs placed at the suspension)`);
+      return {
+        name, file: '(stand-in for a base-game wheel)', source: Infinity,
+        part: { slotType: slotName, j2rGenericWheel: side, slots: [['type', 'default'], ...tireSlots.map((k) => [k, pcParts[k]])] },
+      };
+    }
+    const genericWheels = [];
+    function resolve(name, slotOptions, depth, slotName) {
       if (depth > 40) { warn('Slot tree is too deep (circular slots?)'); return; }
       let entry = lib.parts.get(name);
-      if (!entry) entry = synthesizeTire(name) || synthesizeWheel(name);
+      if (!entry) entry = synthesizeTire(name) || synthesizeWheel(name) || genericWheel(name, slotName);
+      if (entry && entry.part.j2rGenericWheel) genericWheels.push({ side: entry.part.j2rGenericWheel, opt: slotOptions || null });
       if (!entry) { missingParts.push(name); return; }
       if (used.has(name)) return;
       used.add(name);
@@ -1004,7 +1020,7 @@ footer p { margin: 0 0 6px; }
           if (typeof chosen !== 'string' || chosen === '') continue;
           const own = isDict(row[row.length - 1]) ? row[row.length - 1] : null;
           const opt = own || slotOptions ? Object.assign({}, slotOptions || {}, own || {}) : null;
-          resolve(chosen, opt, depth + 1);
+          resolve(chosen, opt, depth + 1, slotName);
         }
       }
     }
@@ -1124,6 +1140,41 @@ footer p { margin: 0 0 6px; }
     if (!nodes.size) throw new Error('The selected configuration has no nodes.');
     const hasNode = (id) => nodes.has(String(id));
     if (dupNodes) warn(`${dupNodes} node(s) are defined by more than one part (normal for BeamNG cars); the last definition is used, as in BeamNG`);
+    // Stand-in wheels: make the missing hub nodes (node1 / node2 of the wheel rows) next to
+    // the suspension nodes both of them are beamed to (the spindle): centre height and
+    // fore-aft from the spindle, inner hub just outboard of it, outer hub a tyre width (+6 cm) further out.
+    if (genericWheels.length) {
+      const links = new Map();
+      const addLink = (a, b) => { if (!links.has(a)) links.set(a, new Set()); links.get(a).add(b); };
+      for (const { cols } of rowsOf('beams')) if (cols.id1 !== undefined && cols.id2 !== undefined) { addLink(String(cols.id1), String(cols.id2)); addLink(String(cols.id2), String(cols.id1)); }
+      let made = 0;
+      for (const { cols, props } of rowsOf('pressureWheels')) {
+        const n1 = String(cols.node1), n2 = String(cols.node2), wname = String(cols.name || '');
+        const gw = genericWheels.find((g) => g.side === wname.charAt(0).toUpperCase());
+        if (!gw || (nodes.has(n1) && nodes.has(n2))) continue;
+        const spindle = [...(links.get(n1) || [])].filter((id) => (links.get(n2) || new Set()).has(id) && nodes.has(id));
+        if (spindle.length < 2) continue;
+        const sp = spindle.map((id) => nodes.get(id).pos);
+        const c = sp.reduce((acc, q) => v3.add(acc, q), [0, 0, 0]).map((x) => x / sp.length);
+        // the wheel slot's nodeOffset is the wheel centre (BeamNG y forward-back, z up)
+        const off = gw.opt && isDict(gw.opt.nodeOffset) ? gw.opt.nodeOffset : null;
+        if (off && isFinite(Number(off.y)) && isFinite(Number(off.z))) { const t = toRoR(0, Number(off.y), Number(off.z)); c[1] = t[1]; c[2] = t[2]; }
+        const sideSign = Math.sign(c[0]) || (/l$/i.test(wname) ? 1 : -1); // RoR x points to the car's left
+        // the spindle proper: shared nodes close to the wheel centre (not the frame or fender)
+        const near = sp.filter((q) => Math.hypot(q[1] - c[1], q[2] - c[2]) < 0.25);
+        const innerX = Math.max(...(near.length ? near : sp).map((q) => q[0] * sideSign)) + 0.01;
+        const tw = num(props.tireWidth, 0.15);
+        // the node with the longer name is the outer one (fw1rr vs fw1r)
+        const [inner, outer] = n1.length <= n2.length ? [n1, n2] : [n2, n1];
+        const groups = [cols.hubGroup, props.hubGroup, cols.group].flatMap((g) => (Array.isArray(g) ? g : [g])).filter((g) => typeof g === 'string' && g);
+        for (const [id, x] of [[inner, innerX], [outer, innerX + Math.max(0.15, tw + 0.06)]]) {
+          if (nodes.has(id)) continue;
+          nodes.set(id, { id, pos: [x * sideSign, c[1], c[2]], weight: 4.5, collision: true, friction: 0.5, groups });
+          made++;
+        }
+      }
+      if (made) warn(`The mod's configuration uses wheels from the base game that it has no pattern for; ${made / 2} wheel hub(s) were built at the suspension instead.`);
+    }
 
     // -- beams ---------------------------------------------------------------
     const beams = [];
@@ -3796,6 +3847,7 @@ footer p { margin: 0 0 6px; }
     const lightMats = new Map(); // OGRE material -> flare type
     const rimOf = new Map(); // wheel -> rim vertex arrays (to size the tyre)
     const modTyred = new Set(); // wheels with the mod's own tyre model
+    const untransformed = [];
     const wheelOf = (gname) => {
       for (const w of plan.wheels || []) if (w.groups.includes(gname)) return w;
       const m = /^(?:wheel|wheelhub|hubcap|tire|tyre)_(.+)$/i.exec(gname);
@@ -3830,12 +3882,21 @@ footer p { margin: 0 0 6px; }
       // .dae and move it again in the jbeam; applying both put the SUV's plate above the roof)
       const placed = (fb.pos && fb.pos.some((x) => x)) || (fb.rot && fb.rot.some((x) => x));
       let g;
-      if (placed && item.matrix && !m4.isId(item.matrix)) {
-        if (!item.localCache) item.localCache = geometryOf(dae, Object.assign({}, item, { matrix: m4.id() }));
-        g = item.localCache;
-      } else {
+      const localGeo = () => { if (!item.localCache) item.localCache = geometryOf(dae, Object.assign({}, item, { matrix: m4.id() })); return item.localCache; };
+      if (placed && item.matrix && !m4.isId(item.matrix)) g = localGeo();
+      else {
         if (!item.cache) item.cache = geometryOf(dae, item);
         g = item.cache;
+        // Some models keep a part's node transform (e.g. the Ibishu Shima's engine moved 2 m
+        // aside) that BeamNG doesn't use: if the transform puts the mesh well away from its
+        // own nodes and the untransformed mesh sits on them, take the untransformed one
+        if (g && item.matrix && !m4.isId(item.matrix) && fb.nodes.length) {
+          const nc = [0, 0, 0];
+          for (const n of fb.nodes) for (let q = 0; q < 3; q++) nc[q] += byNum[n].pos[q] / fb.nodes.length;
+          const offBy = (geo) => { const c = [0, 0, 0], n = geo.pos.length / 3; for (let i = 0; i < geo.pos.length; i += 3) { c[0] += geo.pos[i] / n; c[1] += geo.pos[i + 2] / n; c[2] -= geo.pos[i + 1] / n; } return Math.hypot(c[0] - nc[0], c[1] - nc[1], c[2] - nc[2]); };
+          const dT = offBy(g);
+          if (dT > 0.6) { const gl = localGeo(); if (gl && offBy(gl) < dT * 0.5) { g = gl; untransformed.push(fb.mesh); } }
+        }
       }
       if (!g || !g.subs.length) continue;
       // forset: the nodes of the flexbody's groups
@@ -4072,6 +4133,7 @@ footer p { margin: 0 0 6px; }
       lathe(w, prof, t0, h, tyreMat, 'tyre', (tt, rr) => [rr - midR, tt * h * 1.5]);
       tyred.push(w.name);
     }
+    if (untransformed.length) note(`${untransformed.length} part(s) were placed without their model-file offset, which put them away from the car: ${[...new Set(untransformed)].slice(0, 8).join(', ')}`);
     if (anchorFixed) note(`${anchorFixed} part(s) got extra anchor nodes so their mesh doesn't spike in crashes.`);
     if (rimsMade) note(`${rimsMade} wheel(s) use a rim model from the base game; a plain steel rim was built instead.`);
     // ---- props (steering wheel, gauge needles, pedals), working mirrors, lights ----
