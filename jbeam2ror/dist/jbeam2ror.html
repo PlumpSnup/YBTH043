@@ -209,7 +209,7 @@ footer p { margin: 0 0 6px; }
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v54';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v55';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -1182,6 +1182,7 @@ footer p { margin: 0 0 6px; }
     const shocks = [];
     const steeringHydros = [];
     let skippedBeams = 0;
+    const lbeams = [];
     const AIR_K = 35000; // N/m, a typical car air spring at ride height
     const beamKeys = new Set();
     function beamProps(props) {
@@ -1207,10 +1208,12 @@ footer p { margin: 0 0 6px; }
           deform: BIG, strength: BIG, air: true });
         continue;
       }
-      if (type === 'BROKEN' || type === 'LBEAM') {
-        if (type !== 'BROKEN') warn(`Beam type |${type} is not supported by RoR and was skipped`);
+      if (type === 'LBEAM') {
+        // a leaf spring half (bending beam through a third node): handled below as a whole
+        lbeams.push({ a: String(a), b: String(b), spring: Math.max(0, num(props.beamSpring, BNG.beamSpring)), damp: Math.max(0, num(props.beamDamp, BNG.beamDamp)) });
         continue;
       }
+      if (type === 'BROKEN') continue;
       const bp = beamProps(props);
       const L = v3.len(v3.sub(nodes.get(String(a)).pos, nodes.get(String(b)).pos));
       if (L < 1e-4) continue;
@@ -1294,6 +1297,41 @@ footer p { margin: 0 0 6px; }
       beams.push({ a: String(a), b: String(b), ...bp, support: type === 'SUPPORT' });
     }
     if (skippedBeams) warn(`${skippedBeams} beam(s) referenced nodes that don't exist in this configuration and were skipped`);
+    // Leaf springs: BeamNG bends them (|LBEAM, from the axle through a third node to the
+    // spring eye). RoR has no bending beam, and the leaf runs almost level, so as a plain
+    // beam it would hold nothing up. Instead each axle node on leaf beams gets a vertical
+    // spring up to the body node right above it, levelled below to the design ride height.
+    if (lbeams.length) {
+      const byAxle = new Map();
+      for (const l of lbeams) for (const id of [l.a, l.b]) {
+        const other = id === l.a ? l.b : l.a;
+        // the axle end of the leaf is the node the leaf beams share (several leaves meet there)
+        if (!byAxle.has(id)) byAxle.set(id, { k: 0, c: 0, n: 0, others: new Set() });
+        const e = byAxle.get(id); e.k += l.spring; e.c += l.damp; e.n++; e.others.add(other);
+      }
+      const leafNodes = new Set(lbeams.flatMap((l) => [l.a, l.b]));
+      let made = 0;
+      for (const [id, e] of byAxle) {
+        if (e.n < 2 || !hasNode(id)) continue; // the axle node carries the front and rear half
+        const p = nodes.get(id).pos;
+        let best = null, bd = Infinity;
+        for (const nd of nodes.values()) {
+          if (leafNodes.has(nd.id) || nd.id === id || nd.weight < 2) continue;
+          const dy = nd.pos[1] - p[1], dh = Math.hypot(nd.pos[0] - p[0], nd.pos[2] - p[2]);
+          if (dy < 0.08 || dy > 0.9 || dh > 0.35) continue;
+          const score = dh + 0.3 * dy;
+          if (score < bd) { bd = score; best = nd.id; }
+        }
+        if (!best) continue;
+        const L = v3.len(v3.sub(nodes.get(best).pos, p));
+        const k = Math.max(15000, Math.min(80000, 0.1 * e.k));
+        shocks.push({ a: id, b: best, spring: k, damp: Math.max(300, 0.04 * k), sb: 0.9, lb: 2, precomp: 1 + 0.05 / L, hardK: k, hardD: Math.max(300, 0.04 * k),
+          deform: BIG, strength: BIG, air: true, leaf: true });
+        made++;
+      }
+      if (made) warn(`Leaf springs (${lbeams.length} bending beams, which RoR doesn't have) became ${made} spring(s) from the axle to the body, set to hold the design ride height.`);
+      else warn('Leaf springs (|LBEAM) could not be converted; the axle may sag.');
+    }
 
     // -- hydros: steering ones become RoR hydros, others rigid beams ---------
     for (const { cols, props } of rowsOf('hydros')) {
@@ -1902,8 +1940,8 @@ footer p { margin: 0 0 6px; }
       }
       const moved = level.filter((x) => Math.abs(x.precomp - x.p0) * x.L > 0.005);
       for (const x of level) { delete x.L; delete x.p0; }
-      const nAir = level.filter((x) => x.air).length;
-      if (nAir) warn(`Air suspension (${nAir} air spring(s)) converted to springs that hold the design ride height; it doesn't self-level while driving.`);
+      const nAirOnly = level.filter((x) => !x.leaf).length;
+      if (nAirOnly) warn(`Air suspension (${nAirOnly} air spring(s)) converted to springs that hold the design ride height; it doesn't self-level while driving.`);
       if (moved.length && worst > 0.015) warn(`Air springs: still ${Math.round(worst * 100)} cm from their design length after levelling.`);
     }
     const finalMass = [...nodes.values()].reduce((s, nd) => s + nd.weight, 0);
