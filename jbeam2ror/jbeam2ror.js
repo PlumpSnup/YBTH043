@@ -20,7 +20,7 @@
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v55';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v56';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -1021,7 +1021,8 @@
       }
       if (type === 'LBEAM') {
         // a leaf spring half (bending beam through a third node): handled below as a whole
-        lbeams.push({ a: String(a), b: String(b), spring: Math.max(0, num(props.beamSpring, BNG.beamSpring)), damp: Math.max(0, num(props.beamDamp, BNG.beamDamp)) });
+        const c3 = props['id3:'] !== undefined ? props['id3:'] : props.id3 !== undefined ? props.id3 : cols.id3;
+        lbeams.push({ a: String(a), b: String(b), c: c3 !== undefined ? String(c3) : null, spring: Math.max(0, num(props.beamSpring, BNG.beamSpring)), damp: Math.max(0, num(props.beamDamp, BNG.beamDamp)) });
         continue;
       }
       if (type === 'BROKEN') continue;
@@ -1108,22 +1109,23 @@
       beams.push({ a: String(a), b: String(b), ...bp, support: type === 'SUPPORT' });
     }
     if (skippedBeams) warn(`${skippedBeams} beam(s) referenced nodes that don't exist in this configuration and were skipped`);
-    // Leaf springs: BeamNG bends them (|LBEAM, from the axle through a third node to the
-    // spring eye). RoR has no bending beam, and the leaf runs almost level, so as a plain
-    // beam it would hold nothing up. Instead each axle node on leaf beams gets a vertical
-    // spring up to the body node right above it, levelled below to the design ride height.
+    // Leaf springs: BeamNG bends them (|LBEAM, from the axle through a third node, the leaf
+    // centre, to the spring eye). RoR has no bending beam, and the leaf runs almost level, so
+    // as a plain beam it would hold nothing up. Instead the leaf centre gets a vertical spring
+    // up to the body node right above it, levelled below to the design ride height.
     if (lbeams.length) {
+      // The node the leaf's bending holds up is its third node (id3: the leaf centre the axle
+      // sits on); without one, the node the leaf beams share (the axle end)
       const byAxle = new Map();
-      for (const l of lbeams) for (const id of [l.a, l.b]) {
-        const other = id === l.a ? l.b : l.a;
-        // the axle end of the leaf is the node the leaf beams share (several leaves meet there)
-        if (!byAxle.has(id)) byAxle.set(id, { k: 0, c: 0, n: 0, others: new Set() });
-        const e = byAxle.get(id); e.k += l.spring; e.c += l.damp; e.n++; e.others.add(other);
+      const add = (id) => { if (!byAxle.has(id)) byAxle.set(id, { k: 0, c: 0, n: 0 }); return byAxle.get(id); };
+      for (const l of lbeams) {
+        if (l.c && hasNode(l.c)) { const e = add(l.c); e.k += l.spring; e.c += l.damp; e.n += 2; continue; }
+        for (const id of [l.a, l.b]) { const e = add(id); e.k += l.spring; e.c += l.damp; e.n++; }
       }
-      const leafNodes = new Set(lbeams.flatMap((l) => [l.a, l.b]));
+      const leafNodes = new Set(lbeams.flatMap((l) => [l.a, l.b, l.c].filter(Boolean)));
       let made = 0;
       for (const [id, e] of byAxle) {
-        if (e.n < 2 || !hasNode(id)) continue; // the axle node carries the front and rear half
+        if (e.n < 2 || !hasNode(id)) continue; // carries the front and rear half of the leaf
         const p = nodes.get(id).pos;
         let best = null, bd = Infinity;
         for (const nd of nodes.values()) {
