@@ -20,7 +20,7 @@
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v53';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v54';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -953,7 +953,7 @@
     if (dupNodes) warn(`${dupNodes} node(s) are defined by more than one part (normal for BeamNG cars); the last definition is used, as in BeamNG`);
     // Stand-in wheels: make the missing hub nodes (node1 / node2 of the wheel rows) next to
     // the suspension nodes both of them are beamed to (the spindle): centre height and
-    // fore-aft from the spindle, inner hub just outboard of it, outer hub a tyre width (+6 cm) further out.
+    // fore-aft from the spindle, inner hub 10 cm inboard of its outermost node, outer hub 22 cm further out (as BeamNG's own wheels).
     if (genericWheels.length) {
       const links = new Map();
       const addLink = (a, b) => { if (!links.has(a)) links.set(a, new Set()); links.get(a).add(b); };
@@ -973,12 +973,13 @@
         const sideSign = Math.sign(c[0]) || (/l$/i.test(wname) ? 1 : -1); // RoR x points to the car's left
         // the spindle proper: shared nodes close to the wheel centre (not the frame or fender)
         const near = sp.filter((q) => Math.hypot(q[1] - c[1], q[2] - c[2]) < 0.25);
-        const innerX = Math.max(...(near.length ? near : sp).map((q) => q[0] * sideSign)) + 0.01;
-        const tw = num(props.tireWidth, 0.15);
+        // like BeamNG's own wheels: the inner hub ~10 cm inboard of the outermost spindle node,
+        // the outer one 22 cm further out, so the hub straddles the spindle and is braced
+        const innerX = Math.max(...(near.length ? near : sp).map((q) => q[0] * sideSign)) - 0.1;
         // the node with the longer name is the outer one (fw1rr vs fw1r)
         const [inner, outer] = n1.length <= n2.length ? [n1, n2] : [n2, n1];
         const groups = [cols.hubGroup, props.hubGroup, cols.group].flatMap((g) => (Array.isArray(g) ? g : [g])).filter((g) => typeof g === 'string' && g);
-        for (const [id, x] of [[inner, innerX], [outer, innerX + Math.max(0.15, tw + 0.06)]]) {
+        for (const [id, x] of [[inner, innerX], [outer, innerX + 0.22]]) {
           if (nodes.has(id)) continue;
           nodes.set(id, { id, pos: [x * sideSign, c[1], c[2]], weight: 4.5, collision: true, friction: 0.5, groups });
           made++;
