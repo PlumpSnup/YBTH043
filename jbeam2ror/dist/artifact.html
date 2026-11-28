@@ -202,7 +202,7 @@ footer p { margin: 0 0 6px; }
   const PHYSICS_DT = 0.0005;          // Both BeamNG and RoR step physics at 2000 Hz.
   const FLT_MAX = 3.4028234663852886e38;
   const BIG = 1e9;                    // "Unbreakable" stand-in written to the .truck file.
-  const CONVERTER_VERSION = 'v59';      // shown in the vehicle name so RoR logs say which converter version made it
+  const CONVERTER_VERSION = 'v60';      // shown in the vehicle name so RoR logs say which converter version made it
 
   // Troubleshooting builds: each changes one suspect so a user can find, in the game,
   // which feature makes a vehicle unstable in RoR.
@@ -1146,7 +1146,7 @@ footer p { margin: 0 0 6px; }
       const links = new Map();
       const addLink = (a, b) => { if (!links.has(a)) links.set(a, new Set()); links.get(a).add(b); };
       for (const { cols } of rowsOf('beams')) if (cols.id1 !== undefined && cols.id2 !== undefined) { addLink(String(cols.id1), String(cols.id2)); addLink(String(cols.id2), String(cols.id1)); }
-      let made = 0;
+      const made = [];
       for (const { cols, props } of rowsOf('pressureWheels')) {
         const n1 = String(cols.node1), n2 = String(cols.node2), wname = String(cols.name || '');
         const gw = genericWheels.find((g) => g.side === wname.charAt(0).toUpperCase());
@@ -1167,13 +1167,30 @@ footer p { margin: 0 0 6px; }
         // the node with the longer name is the outer one (fw1rr vs fw1r)
         const [inner, outer] = n1.length <= n2.length ? [n1, n2] : [n2, n1];
         const groups = [cols.hubGroup, props.hubGroup, cols.group].flatMap((g) => (Array.isArray(g) ? g : [g])).filter((g) => typeof g === 'string' && g);
-        for (const [id, x] of [[inner, innerX], [outer, innerX + 0.22]]) {
+        const offX = off && off.x !== undefined ? Number(evalValue(off.x)) : NaN;
+        made.push({ inner, outer, innerX, c, sideSign, groups, offX, R: num(props.radius, NaN) });
+      }
+      // Line the axles up: the same base-game wheel on every axle, so the hubs differ only by
+      // each slot's x offset. The spindle-based guess runs narrow on some axles (a wishbone
+      // spindle sits further in than a solid axle's end), so use the widest one's base.
+      const withOff = made.filter((m) => isFinite(m.offX));
+      if (withOff.length > 1) {
+        const base = Math.max(...withOff.map((m) => m.innerX - m.offX));
+        for (const m of withOff) m.innerX = Math.max(m.innerX, base + m.offX);
+      }
+      // All tyres touch the ground at spawn, as the car is modelled in BeamNG
+      const withR = made.filter((m) => isFinite(m.R) && m.R > 0.05);
+      if (withR.length > 1) {
+        const ground = Math.min(...withR.map((m) => m.c[1] - m.R));
+        for (const m of withR) m.c[1] = ground + m.R;
+      }
+      for (const m of made) {
+        for (const [id, x] of [[m.inner, m.innerX], [m.outer, m.innerX + 0.22]]) {
           if (nodes.has(id)) continue;
-          nodes.set(id, { id, pos: [x * sideSign, c[1], c[2]], weight: 4.5, collision: true, friction: 0.5, groups });
-          made++;
+          nodes.set(id, { id, pos: [x * m.sideSign, m.c[1], m.c[2]], weight: 4.5, collision: true, friction: 0.5, groups: m.groups });
         }
       }
-      if (made) warn(`The mod's configuration uses wheels from the base game that it has no pattern for; ${made / 2} wheel hub(s) were built at the suspension instead.`);
+      if (made.length) warn(`The mod's configuration uses wheels from the base game that it has no pattern for; ${made.length} wheel hub(s) were built at the suspension instead.`);
     }
 
     // -- beams ---------------------------------------------------------------
